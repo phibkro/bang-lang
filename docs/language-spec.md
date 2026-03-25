@@ -352,38 +352,44 @@ Handler         = TypeIdent '->' Expr ;
 
     USING EFFECTS
     ─────────────
-    Using an operation adds the effect to the effect set.
-    The compiler infers the full effect set from the body —
+    Using an operation adds the effect to the appropriate
+    channel. The compiler infers both E and R from the body —
     explicit type annotation is optional:
 
     -- Explicit annotation:
-    getUser : Int -> Effect User { Database, Fail NotFoundError }
+    getUser : Int -> Effect User { Fail NotFoundError } { Database }
 
-    -- Or just write the function. Compiler infers effects:
+    -- Or just write the function. Compiler infers E and R:
     getUser = (id) -> {
-      rows = !Database.query id         -- adds Database
+      rows = !Database.query id         -- adds Database to R
       match rows {
         Cons user _ -> user
-        Nil         -> !Fail.fail (NotFound id)  -- adds Fail NotFoundError
+        Nil         -> !Fail.fail (NotFound id)  -- adds Fail NotFoundError to E
       }
     }
 
     HANDLING EFFECTS
     ────────────────
-    handle provides implementations and eliminates
-    effects from the set:
+    handle is unified — it handles both dependency effects
+    (from R) and error effects (from E) in the same block:
 
     !handle (getUser 42) {
-      Database -> pgDatabase
+      Database -> pgDatabase,
+      Fail     -> { fail = (e) -> { None } }
     }
 
     Handlers are always explicit. You see exactly which
     implementation is used by reading the code.
 
-    Multiple effects:
+    Handling a dependency eliminates it from R:
     !handle myApp {
       Database -> pgDatabase,
       Console  -> consoleNode
+    }
+
+    Handling an error eliminates it from E:
+    !handle (getUser 42) {
+      Fail -> { fail = (e) -> { fallbackValue } }
     }
 
     Inline handlers for one-offs:
@@ -394,22 +400,17 @@ Handler         = TypeIdent '->' Expr ;
       }
     }
 
-    Error effects are handled the same way:
-    !handle (getUser 42) {
-      Fail -> { fail = (e) -> { None } }
-    }
-
     EFFECT COMPOSITION
     ──────────────────
     Effects compose through the call graph. Calling a
     function that uses effects adds them to yours:
 
     getUserAndLog = (id) -> {
-      user = !getUser id          -- adds { Database, Fail NotFoundError }
-      !Console.log user.name      -- adds { Console }
+      user = !getUser id          -- adds Database to R, Fail NotFoundError to E
+      !Console.log user.name      -- adds Console to R
       user
     }
-    -- Inferred: Effect User { Database, Console, Fail NotFoundError }
+    -- Inferred: Effect User { Fail NotFoundError } { Database, Console }
 
     TESTING
     ───────
@@ -769,21 +770,22 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     EFFECT TYPE
     ───────────
-    Effect A E
+    Effect A E R
         A   value type
-        E   effect row { Effect1, Effect2, ... }
+        E   error effects (operations returning Nothing)
+        R   dependency effects (operations returning values)
 
-    Errors and dependencies are both algebraic effects
-    in a single row. The compiler determines how to lower
-    each effect to Effect TS based on its declaration:
+    Both E and R are algebraic effects declared with 'effect'.
+    The compiler separates them based on operation return types.
+    The unified handle operator works on both channels.
 
-    getUser : Int -> Effect User { Database, Fail NotFoundError }
-    --                       A    E (unified effect row)
+    getUser : Int -> Effect User { Fail NotFoundError } { Database }
+    --                       A    E                      R
 
     Explicit type annotation is optional. The compiler
-    infers the effect row from operations used in the body.
+    infers E and R from operations used in the body.
 
-    Signal A E
+    Signal A E R
         Pure reactive computation with the same structure.
         Compiler infers Signal when body contains no !.
         Signal and Effect compile to the same Effect.Effect<A,E,R>
@@ -793,16 +795,27 @@ Constraint      = TypeVar ':' TypeIdent ;
     TRef A          mutable reference  (transaction context)
     Unit            absence of value  ()
 
-    EFFECT ROW SYNTAX
+    ERROR EFFECTS (E)
     ─────────────────
-    {}                                    no effects (pure)
-    { Console }                           single effect
-    { Database, Console }                 multiple effects
-    { Database, Fail NotFoundError }      errors are effects too
-    { Database, Console | e }             open row (polymorphic)
+    Effects whose operations return Nothing.
+    Propagate automatically through the call graph:
+
+    {}                              no errors (infallible)
+    { Fail NotFoundError }          single error
+    { Fail DbError, Fail AuthError } multiple errors
+
+    DEPENDENCY EFFECTS (R)
+    ──────────────────────
+    Effects whose operations return values.
+    Must be explicitly handled:
+
+    {}                              no dependencies (pure)
+    { Console }                     single dependency
+    { Database, Console }           multiple dependencies
+    { Database, Console | r }       open row (polymorphic)
 
     Open rows enable effect polymorphism:
-    mapE : (a -> Effect b e) -> List a -> Effect (List b) e
+    mapE : (a -> Effect b e r) -> List a -> Effect (List b) e r
 
     PRELUDE TYPES (defined as ADTs in @bang/std)
     ─────────────
@@ -826,10 +839,10 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     Resource A = {
         value   : A,
-        cleanup : Effect Unit {}
+        cleanup : Effect Unit {} {}
     }
 
-    withX : (Resource X -> Effect A { x }) -> Effect A {}
+    withX : (Resource X -> Effect A {} { x }) -> Effect A {} {}
 
     The handler must consume the resource within its scope.
     The resource never escapes. Cleanup is guaranteed.
@@ -846,13 +859,15 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     MUST-HANDLE
     ───────────
-    Any expression of type Effect A E or Result A E
+    Any expression of type Effect A E R or Result A E
     appearing in statement position without force
     is a type error.
 
-    Unhandled effects (non-empty E) at the top-level !
-    boundary is a compile error. All effects must be
-    handled before Effect.runPromise.
+    Unhandled dependencies (non-empty R) at the top-level !
+    boundary is a compile error. All dependency effects
+    must be handled before Effect.runPromise.
+    Unhandled errors (non-empty E) at the top-level are
+    a warning — they become runtime defects if not caught.
 *)
 
 
