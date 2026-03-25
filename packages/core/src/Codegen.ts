@@ -76,6 +76,33 @@ const countParams = (type: Ast.Type): number =>
 
 const toWrapperName = (name: string): string => name.replace(/\./g, "_");
 
+const mapBinaryOp = (op: string): string => {
+  switch (op) {
+    case "==": return "===";
+    case "!=": return "!==";
+    case "and": return "&&";
+    case "or": return "||";
+    case "xor": return "!==";
+    case "++": return "+";
+    default: return op;
+  }
+};
+
+// JavaScript operator precedence for binary operators (higher = tighter binding)
+const JS_PREC: Record<string, number> = {
+  "||": 4, "&&": 5, "!==": 7, "===": 8, "<": 9, ">": 9, "<=": 9, ">=": 9,
+  "+": 12, "-": 12, "*": 14, "/": 14, "%": 14,
+};
+
+const jsPrecOf = (jsOp: string): number => JS_PREC[jsOp] ?? 0;
+
+const mapUnaryOp = (op: string): string => {
+  switch (op) {
+    case "not": return "!";
+    default: return op;
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Declared name info
 // ---------------------------------------------------------------------------
@@ -124,11 +151,67 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
       }),
     ),
     Match.tag("App", (e) => {
-      const func = emitExpr(e.func, decls);
-      const args = Arr.map(e.args, (a) => emitExpr(a, decls)).join(", ");
-      return `${func}(${args})`;
+      const funcCode = emitExpr(e.func, decls);
+      // Check if the function is a declared wrapper (use comma-separated args)
+      const dottedName = buildDottedName(e.func);
+      const isDeclared = Option.isSome(
+        Option.flatMap(dottedName, (n) => HashMap.get(decls, n)),
+      );
+      if (isDeclared) {
+        const args = Arr.map(e.args, (a) => emitExpr(a, decls)).join(", ");
+        return `${funcCode}(${args})`;
+      }
+      // User-defined: curried application
+      return Arr.reduce(e.args, funcCode, (fn, arg) => `${fn}(${emitExpr(arg, decls)})`);
     }),
     Match.tag("Force", (e) => `yield* ${emitExpr(e.expr, decls)}`),
+    Match.tag("FloatLiteral", (e) => String(e.value)),
+    Match.tag("BinaryExpr", (e) => {
+      const op = mapBinaryOp(e.op);
+      const prec = jsPrecOf(op);
+      const leftCode = emitExpr(e.left, decls);
+      const rightCode = emitExpr(e.right, decls);
+      const left =
+        e.left._tag === "BinaryExpr" && jsPrecOf(mapBinaryOp(e.left.op)) < prec
+          ? `(${leftCode})`
+          : leftCode;
+      const right =
+        e.right._tag === "BinaryExpr" && jsPrecOf(mapBinaryOp(e.right.op)) < prec
+          ? `(${rightCode})`
+          : rightCode;
+      return `${left} ${op} ${right}`;
+    }),
+    Match.tag("UnaryExpr", (e) => {
+      const op = mapUnaryOp(e.op);
+      return `${op}${emitExpr(e.expr, decls)}`;
+    }),
+    Match.tag("Block", (e) => {
+      if (e.statements.length === 0) {
+        return emitExpr(e.expr, decls);
+      }
+      const stmtLines = e.statements.map((stmt) => {
+        // Reuse emitStatement logic but extract just the text
+        const w = emitStatement(emptyWriter, { node: stmt, annotation: {} as any }, decls);
+        return w.lines.map((l) => `  ${l}`).join("\n");
+      });
+      const returnLine = `  return ${emitExpr(e.expr, decls)}`;
+      const body = [...stmtLines, returnLine].join("\n");
+      return `Effect.gen(function*() {\n${body}\n})`;
+    }),
+    Match.tag("Lambda", (e) => {
+      // Emit body: if Block with no statements, emit expr directly; otherwise Effect.gen
+      const bodyCode = e.body._tag === "Block" ? emitExpr(e.body, decls) : emitExpr(e.body, decls);
+      // Build curried: (a) => (b) => bodyCode
+      return e.params.reduceRight((inner, param) => `(${param}) => ${inner}`, bodyCode);
+    }),
+    Match.tag("StringInterp", (e) => {
+      const inner = e.parts
+        .map((part) =>
+          part._tag === "InterpText" ? part.value : `\${${emitExpr(part.value, decls)}}`,
+        )
+        .join("");
+      return `\`${inner}\``;
+    }),
     Match.exhaustive,
   );
 

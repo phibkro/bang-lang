@@ -2,6 +2,7 @@ import { Effect, Option } from "effect";
 import * as Ast from "./Ast.js";
 import type { CompilerError } from "./CompilerError.js";
 import { ParseError } from "./CompilerError.js";
+import * as Lexer from "./Lexer.js";
 import * as Span from "./Span.js";
 import type { Token } from "./Token.js";
 
@@ -233,14 +234,164 @@ const parseExprStatement = (s: ParseState): P<Ast.ExprStatement> =>
   );
 
 // ---------------------------------------------------------------------------
-// Expressions
+// Expressions — Pratt parser (precedence climbing)
 // ---------------------------------------------------------------------------
 
-const parseExpr = (s: ParseState): P<Ast.Expr> =>
+const PREC_MUT = 1;
+const PREC_XOR = 4;
+const PREC_OR = 5;
+const PREC_AND = 6;
+const PREC_CMP = 7;
+const PREC_ADD = 8;
+const PREC_MUL = 9;
+const PREC_UNARY = 10;
+const PREC_APP = 11;
+
+const BINARY_PREC: Record<string, number> = {
+  "<-": PREC_MUT,
+  "xor": PREC_XOR,
+  "or": PREC_OR,
+  "and": PREC_AND,
+  "==": PREC_CMP, "!=": PREC_CMP, "<": PREC_CMP, ">": PREC_CMP, "<=": PREC_CMP, ">=": PREC_CMP,
+  "+": PREC_ADD, "-": PREC_ADD, "++": PREC_ADD,
+  "*": PREC_MUL, "/": PREC_MUL, "%": PREC_MUL,
+};
+
+const RIGHT_ASSOC = new Set(["<-"]);
+
+const getBinaryPrec = (t: Token): number | undefined => {
+  const tag = tokenTag(t);
+  const val = tokenValue(t);
+  if (tag === "Operator" && val in BINARY_PREC) return BINARY_PREC[val];
+  if (tag === "Keyword" && val in BINARY_PREC) return BINARY_PREC[val];
+  return undefined;
+};
+
+const parseExpr = (s: ParseState): P<Ast.Expr> => parseExprPrec(s, 0);
+
+const tryParseLambda = (s: ParseState): P<Option.Option<Ast.Lambda>> =>
   Effect.gen(function* () {
-    const [primary, s1] = yield* parsePrimary(s);
-    const [dotExpr, s2] = yield* parseDotAccess(primary, s1);
-    return yield* parseApplication(dotExpr, s2);
+    // Count consecutive Ident tokens from current position
+    let paramCount = 0;
+    let scanning = true;
+    while (scanning) {
+      const tok = peekAt(s, paramCount);
+      if (Option.isSome(tok) && tokenTag(tok.value) === "Ident") {
+        paramCount++;
+      } else {
+        scanning = false;
+      }
+    }
+    if (paramCount === 0) return [Option.none(), s] as const;
+    // Check if token after params is ->
+    const afterParams = peekAt(s, paramCount);
+    if (
+      !Option.isSome(afterParams) ||
+      tokenTag(afterParams.value) !== "Operator" ||
+      tokenValue(afterParams.value) !== "->"
+    ) {
+      return [Option.none(), s] as const;
+    }
+    // It's a lambda! Consume param names
+    let st = s;
+    const params: Array<string> = [];
+    for (let i = 0; i < paramCount; i++) {
+      const [tok, st2] = yield* advance(st);
+      params.push(tokenValue(tok));
+      st = st2;
+    }
+    // Consume ->
+    const [, st3] = yield* expect(st, "Operator", "->");
+    // Parse body (must be a Block)
+    const [body, st4] = yield* parseBlock(st3);
+    const startTok = yield* peek(s);
+    return [
+      Option.some(
+        new Ast.Lambda({
+          params,
+          body,
+          span: Span.merge(tokenSpan(startTok), body.span),
+        }),
+      ),
+      st4,
+    ] as const;
+  });
+
+const parseExprPrec = (s: ParseState, minPrec: number): P<Ast.Expr> =>
+  Effect.gen(function* () {
+    // 0. Try lambda (Ident+ -> { body })
+    const [maybeLambda, sAfterLambda] = yield* tryParseLambda(s);
+    if (Option.isSome(maybeLambda)) {
+      return [maybeLambda.value as Ast.Expr, sAfterLambda] as const;
+    }
+
+    // 1. Parse prefix (unary operators)
+    const t = yield* peek(s);
+    let left: Ast.Expr;
+    let state: ParseState;
+
+    if (tokenTag(t) === "Operator" && tokenValue(t) === "!") {
+      const [bangTok, s1] = yield* advance(s);
+      const [operand, s2] = yield* parseExprPrec(s1, PREC_UNARY);
+      left = new Ast.Force({
+        expr: operand,
+        span: Span.merge(tokenSpan(bangTok), operand.span),
+      });
+      state = s2;
+    } else if (tokenTag(t) === "Operator" && tokenValue(t) === "-") {
+      const [opTok, s1] = yield* advance(s);
+      const [operand, s2] = yield* parseExprPrec(s1, PREC_UNARY);
+      left = new Ast.UnaryExpr({
+        op: "-",
+        expr: operand,
+        span: Span.merge(tokenSpan(opTok), operand.span),
+      });
+      state = s2;
+    } else if (tokenTag(t) === "Keyword" && tokenValue(t) === "not") {
+      const [opTok, s1] = yield* advance(s);
+      const [operand, s2] = yield* parseExprPrec(s1, PREC_UNARY);
+      left = new Ast.UnaryExpr({
+        op: "not",
+        expr: operand,
+        span: Span.merge(tokenSpan(opTok), operand.span),
+      });
+      state = s2;
+    } else {
+      // Parse atom, then dot access, then application
+      const [primary, s1] = yield* parsePrimary(s);
+      const [dotExpr, s2] = yield* parseDotAccess(primary, s1);
+      if (minPrec <= PREC_APP) {
+        const [appExpr, s3] = yield* parseApplication(dotExpr, s2);
+        left = appExpr;
+        state = s3;
+      } else {
+        left = dotExpr;
+        state = s2;
+      }
+    }
+
+    // 2. Handle infix operators
+    const parseInfix = (l: Ast.Expr, st: ParseState): P<Ast.Expr> =>
+      Effect.gen(function* () {
+        const atEnd = yield* isAtEnd(st);
+        if (atEnd) return [l, st] as const;
+        const next = yield* peek(st);
+        const prec = getBinaryPrec(next);
+        if (prec === undefined || prec < minPrec) return [l, st] as const;
+        const op = tokenValue(next);
+        const [, st2] = yield* advance(st);
+        const nextPrec = RIGHT_ASSOC.has(op) ? prec : prec + 1;
+        const [right, st3] = yield* parseExprPrec(st2, nextPrec);
+        const binExpr = new Ast.BinaryExpr({
+          op,
+          left: l,
+          right,
+          span: Span.merge(l.span, right.span),
+        });
+        return yield* parseInfix(binExpr, st3);
+      });
+
+    return yield* parseInfix(left, state);
   });
 
 const parseDotAccess = (expr: Ast.Expr, s: ParseState): P<Ast.Expr> =>
@@ -287,6 +438,7 @@ const parseApplication = (func: Ast.Expr, s: ParseState): P<Ast.Expr> =>
 
 const isArgStart = (t: Token): boolean => {
   const tag = tokenTag(t);
+  if (tag === "Delimiter") return tokenValue(t) === "(";
   return (
     tag === "Ident" ||
     tag === "TypeIdent" ||
@@ -297,6 +449,62 @@ const isArgStart = (t: Token): boolean => {
     tag === "Unit"
   );
 };
+
+// ---------------------------------------------------------------------------
+// String interpolation: split "hello ${expr} world" into InterpText/InterpExpr parts
+// ---------------------------------------------------------------------------
+
+const parseStringInterp = (
+  raw: string,
+  span: Span.Span,
+): Effect.Effect<Ast.StringInterp, CompilerError> =>
+  Effect.gen(function* () {
+    const parts: Array<Ast.InterpPart> = [];
+    let i = 0;
+    let textStart = 0;
+
+    while (i < raw.length) {
+      if (raw[i] === "$" && raw[i + 1] === "{") {
+        // Flush accumulated text
+        if (i > textStart) {
+          parts.push(new Ast.InterpText({ value: raw.slice(textStart, i) }));
+        }
+        // Find matching closing brace (simple: no nested braces in v0.2)
+        const exprStart = i + 2;
+        let depth = 1;
+        let j = exprStart;
+        while (j < raw.length && depth > 0) {
+          if (raw[j] === "{") depth++;
+          else if (raw[j] === "}") depth--;
+          if (depth > 0) j++;
+        }
+        if (depth !== 0) {
+          return yield* Effect.fail(
+            new ParseError({ message: "Unterminated interpolation expression", span }),
+          );
+        }
+        const exprText = raw.slice(exprStart, j);
+        // Lex and parse the expression
+        const tokens = yield* Lexer.tokenize(exprText);
+        const exprAst = yield* parseExprFromTokens(tokens);
+        parts.push(new Ast.InterpExpr({ value: exprAst }));
+        i = j + 1;
+        textStart = i;
+      } else {
+        i++;
+      }
+    }
+    // Flush trailing text
+    if (textStart < raw.length) {
+      parts.push(new Ast.InterpText({ value: raw.slice(textStart) }));
+    }
+    return new Ast.StringInterp({ parts, span });
+  });
+
+const parseExprFromTokens = (
+  tokens: ReadonlyArray<Token>,
+): Effect.Effect<Ast.Expr, CompilerError> =>
+  Effect.map(parseExpr(makeState(tokens)), ([expr]) => expr);
 
 const parsePrimary = (s: ParseState): P<Ast.Expr> =>
   Effect.gen(function* () {
@@ -313,12 +521,25 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
     }
     if (tag === "StringLit") {
       const [tok, s1] = yield* advance(s);
-      return [new Ast.StringLiteral({ value: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+      const value = tokenValue(tok);
+      const span = tokenSpan(tok);
+      if (value.includes("${")) {
+        const interp = yield* parseStringInterp(value, span);
+        return [interp, s1] as const;
+      }
+      return [new Ast.StringLiteral({ value, span }), s1] as const;
     }
     if (tag === "IntLit") {
       const [tok, s1] = yield* advance(s);
       return [
         new Ast.IntLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) }),
+        s1,
+      ] as const;
+    }
+    if (tag === "FloatLit") {
+      const [tok, s1] = yield* advance(s);
+      return [
+        new Ast.FloatLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) }),
         s1,
       ] as const;
     }
@@ -334,7 +555,82 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
       return [new Ast.UnitLiteral({ span: tokenSpan(tok) }), s1] as const;
     }
 
+    if (tag === "Delimiter" && tokenValue(t) === "{") {
+      return yield* parseBlock(s);
+    }
+
+    if (tag === "Delimiter" && tokenValue(t) === "(") {
+      // Grouped expression: ( expr )
+      const [, s1] = yield* advance(s); // consume (
+      const [expr, s2] = yield* parseExprPrec(s1, 0); // parse inner expr at lowest prec
+      const [, s3] = yield* expect(s2, "Delimiter", ")"); // consume )
+      return [expr, s3] as const;
+    }
+
     return yield* fail(`Expected expression, got ${tokenDescription(t)}`, s);
+  });
+
+// ---------------------------------------------------------------------------
+// Block expression
+// ---------------------------------------------------------------------------
+
+const parseBlock = (s: ParseState): P<Ast.Block> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Delimiter", "{");
+
+    // Check for empty block
+    const isEmpty = yield* check(s1, "Delimiter", "}");
+    if (isEmpty) {
+      return yield* fail("Empty block expression", s1);
+    }
+
+    // Parse semicolon-separated items: { stmt; stmt; expr }
+    // After each item, if `;` follows it's a statement; if `}` follows it's the return expr.
+    const go = (
+      stmts: ReadonlyArray<Ast.Stmt>,
+      st: ParseState,
+    ): P<readonly [ReadonlyArray<Ast.Stmt>, Ast.Expr, ParseState]> =>
+      Effect.gen(function* () {
+        const [item, st2] = yield* parseBlockItem(st);
+        const hasSemi = yield* check(st2, "Delimiter", ";");
+        if (hasSemi) {
+          // This item is a statement; consume `;` and continue
+          const [, st3] = yield* advance(st2);
+          return yield* go([...stmts, item], st3);
+        }
+        // No semicolon — this must be the return expression
+        if (item._tag !== "ExprStatement") {
+          return yield* fail("Block must end with an expression", st2);
+        }
+        return [stmts, item.expr, st2] as const;
+      });
+
+    const [stmts, expr, s2] = yield* go([], s1);
+    const [endTok, s3] = yield* expect(s2, "Delimiter", "}");
+    const span = Span.merge(tokenSpan(startTok), tokenSpan(endTok));
+
+    return [
+      new Ast.Block({ statements: [...stmts], expr, span }),
+      s3,
+    ] as const;
+  });
+
+const parseBlockItem = (s: ParseState): P<Ast.Stmt> =>
+  Effect.gen(function* () {
+    const t = yield* peek(s);
+
+    if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return yield* parseForceStatement(s);
+    if (tokenTag(t) === "Ident") {
+      return yield* Option.match(peekAt(s, 1), {
+        onNone: () => parseExprStatement(s),
+        onSome: (next) =>
+          tokenTag(next) === "Operator" && tokenValue(next) === "="
+            ? parseDeclaration(s)
+            : parseExprStatement(s),
+      });
+    }
+
+    return yield* parseExprStatement(s);
   });
 
 // ---------------------------------------------------------------------------
