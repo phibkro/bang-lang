@@ -296,6 +296,13 @@ Handler         = TypeIdent '->' Expr ;
     implementations. All handling is explicit — no implicit
     resolution, no default implementations.
 
+    Errors, dependencies, and side effects are all algebraic
+    effects in a single effect row. The difference is how
+    the handler behaves:
+    - Handler resumes with a value  → dependency / service
+    - Handler aborts                → error
+    - Handler transforms and resumes → middleware / interceptor
+
     DECLARING EFFECTS
     ─────────────────
     effect Console {
@@ -306,6 +313,11 @@ Handler         = TypeIdent '->' Expr ;
     effect Database {
       query  : String -> List Row
       insert : Row -> Unit
+    }
+
+    Errors are effects whose operations return Nothing:
+    effect Fail E {
+      fail : E -> Nothing
     }
 
     Effects can be parameterised:
@@ -336,29 +348,30 @@ Handler         = TypeIdent '->' Expr ;
 
     Implementations are first-class values. Export them
     alongside the effect declaration:
-    export Console, consoleNode
-    export Database, pgDatabase
+    export { Database, pgDatabase }
 
     USING EFFECTS
     ─────────────
-    Using an operation adds the effect to the R parameter:
+    Using an operation adds the effect to the effect set.
+    The compiler infers the full effect set from the body —
+    explicit type annotation is optional:
 
-    getUser : Int -> Effect User NotFoundError { Database }
+    -- Explicit annotation:
+    getUser : Int -> Effect User { Database, Fail NotFoundError }
+
+    -- Or just write the function. Compiler infers effects:
     getUser = (id) -> {
-      rows = !Database.query id
+      rows = !Database.query id         -- adds Database
       match rows {
         Cons user _ -> user
-        Nil         -> !fail (NotFound id)
+        Nil         -> !Fail.fail (NotFound id)  -- adds Fail NotFoundError
       }
     }
-
-    The compiler infers { Database } from the operations
-    used in the body.
 
     HANDLING EFFECTS
     ────────────────
     handle provides implementations and eliminates
-    effects from the R parameter:
+    effects from the set:
 
     !handle (getUser 42) {
       Database -> pgDatabase
@@ -381,40 +394,22 @@ Handler         = TypeIdent '->' Expr ;
       }
     }
 
+    Error effects are handled the same way:
+    !handle (getUser 42) {
+      Fail -> { fail = (e) -> { None } }
+    }
+
     EFFECT COMPOSITION
     ──────────────────
     Effects compose through the call graph. Calling a
-    function that uses Database adds Database to your R:
+    function that uses effects adds them to yours:
 
-    getUserAndLog : Int -> Effect User NotFoundError { Database, Console }
     getUserAndLog = (id) -> {
-      user = !getUser id          -- adds { Database }
+      user = !getUser id          -- adds { Database, Fail NotFoundError }
       !Console.log user.name      -- adds { Console }
       user
     }
-
-    ERRORS vs EFFECTS
-    ─────────────────
-    Errors (E) and effects (R) are separate channels:
-
-    Effect A E R
-      A   value type
-      E   error type (ADT, propagates automatically)
-      R   effect set (interfaces, must be handled explicitly)
-
-    Errors propagate up. You catch them:
-    catch (getUser 42) {
-      NotFound msg -> None
-    }
-
-    Effects must be provided. You handle them:
-    !handle (getUser 42) {
-      Database -> pgDatabase
-    }
-
-    This separation is deliberate:
-    - Errors are exceptional. Forgetting to catch is a warning.
-    - Effects are structural. Forgetting to handle is a compile error.
+    -- Inferred: Effect User { Database, Console, Fail NotFoundError }
 
     TESTING
     ───────
@@ -422,7 +417,8 @@ Handler         = TypeIdent '->' Expr ;
 
     testGetUser = {
       result = !handle (getUser 42) {
-        Database -> mockDatabase
+        Database -> mockDatabase,
+        Fail -> { fail = (e) -> { None } }
       }
       !assert (result.name == "test user")
     }
@@ -432,16 +428,26 @@ Handler         = TypeIdent '->' Expr ;
 
     COMPILATION TO EFFECT TS
     ────────────────────────
+    The compiler lowers effects based on their operations:
+
+    Operations returning values → Effect service (R parameter):
     effect Database {                   class Database extends
       query : String -> List Row          Context.Tag("Database")<Database, {
     }                                       readonly query: (sql: string)
                                               => Effect<List<Row>>
                                           }>() {}
 
+    Operations returning Nothing → Tagged error (E parameter):
+    effect Fail E {                     class NotFoundError extends
+      fail : E -> Nothing                 Data.TaggedError("NotFoundError")<{
+    }                                       ...}>() {}
+
+    Implementations → Layer:
     pgDatabase : Database = { ... }     const pgDatabase = {
                                           query: (sql) => ...
                                         }
 
+    Handlers → Effect.provide / Effect.catchTag:
     !handle expr {                      pipe(expr,
       Database -> pgDatabase              Effect.provide(
     }                                       Layer.succeed(Database, pgDatabase)
@@ -467,6 +473,10 @@ Handler         = TypeIdent '->' Expr ;
       fetch : String -> Response
     }
 
+    effect Fail E {                 -- generic error effect
+      fail : E -> Nothing           -- parameterised by error ADT
+    }
+
     effect Random {                 randomDefault : Random
       next     : Unit -> Float
       nextInt  : Int -> Int
@@ -477,8 +487,8 @@ Handler         = TypeIdent '->' Expr ;
     }
 
     Import the effect and its implementation:
-    from STD.IO.CONSOLE import Console, consoleNode
-    from STD.HTTP import Http, httpNode
+    from STD.IO.CONSOLE import { Console, consoleNode }
+    from STD.HTTP import { Http, httpNode }
 *)
 
 
@@ -486,9 +496,9 @@ Handler         = TypeIdent '->' Expr ;
    IMPORTS AND EXPORTS
    ───────────────────────────────────────── *)
 
-Import          = 'from' ModulePath 'import' Ident (',' Ident)* ;
+Import          = 'from' ModulePath 'import' '{' Ident (',' Ident)* '}' ;
 
-Export          = 'export' Ident (',' Ident)* ;
+Export          = 'export' '{' Ident (',' Ident)* '}' ;
 
 ModulePath      = TypeIdent ('.' TypeIdent)* ;
 
@@ -759,17 +769,21 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     EFFECT TYPE
     ───────────
-    Effect A E R
+    Effect A E
         A   value type
-        E   error type (ADT — propagates automatically)
-        R   effect set (interfaces — must be handled explicitly)
+        E   effect row { Effect1, Effect2, ... }
 
-    Errors and effects are SEPARATE channels:
+    Errors and dependencies are both algebraic effects
+    in a single row. The compiler determines how to lower
+    each effect to Effect TS based on its declaration:
 
-    getUser : Int -> Effect User NotFoundError { Database }
-    --                       A   E              R
+    getUser : Int -> Effect User { Database, Fail NotFoundError }
+    --                       A    E (unified effect row)
 
-    Signal A E R
+    Explicit type annotation is optional. The compiler
+    infers the effect row from operations used in the body.
+
+    Signal A E
         Pure reactive computation with the same structure.
         Compiler infers Signal when body contains no !.
         Signal and Effect compile to the same Effect.Effect<A,E,R>
@@ -779,31 +793,16 @@ Constraint      = TypeVar ':' TypeIdent ;
     TRef A          mutable reference  (transaction context)
     Unit            absence of value  ()
 
-    ERROR TYPES (E)
-    ───────────────
-    Errors are ADTs. They propagate automatically and
-    union through the call graph:
-
-    NotFoundError                   single error
-    DbError | NotFoundError         error union
-    {}                              no errors (infallible)
-
-    catch narrows the error type:
-    catch expr {
-      NotFound _ -> fallback       -- removes NotFoundError from E
-    }
-
-    EFFECT SETS (R)
-    ───────────────
-    Effects are interfaces. They must be explicitly handled:
-
-    {}                              no effects (pure)
-    { Console }                     single effect
-    { Database, Console }           multiple effects
-    { Database, Console | r }       open row (polymorphic)
+    EFFECT ROW SYNTAX
+    ─────────────────
+    {}                                    no effects (pure)
+    { Console }                           single effect
+    { Database, Console }                 multiple effects
+    { Database, Fail NotFoundError }      errors are effects too
+    { Database, Console | e }             open row (polymorphic)
 
     Open rows enable effect polymorphism:
-    mapE : (a -> Effect b e r) -> List a -> Effect (List b) e r
+    mapE : (a -> Effect b e) -> List a -> Effect (List b) e
 
     PRELUDE TYPES (defined as ADTs in @bang/std)
     ─────────────
@@ -827,10 +826,10 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     Resource A = {
         value   : A,
-        cleanup : Effect Unit {} {}
+        cleanup : Effect Unit {}
     }
 
-    withX : (Resource X -> Effect A {} { x }) -> Effect A {} {}
+    withX : (Resource X -> Effect A { x }) -> Effect A {}
 
     The handler must consume the resource within its scope.
     The resource never escapes. Cleanup is guaranteed.
@@ -847,11 +846,11 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     MUST-HANDLE
     ───────────
-    Any expression of type Effect A E R or Result A E
+    Any expression of type Effect A E or Result A E
     appearing in statement position without force
     is a type error.
 
-    Unhandled effects (non-empty R) at the top-level !
+    Unhandled effects (non-empty E) at the top-level !
     boundary is a compile error. All effects must be
     handled before Effect.runPromise.
 *)
@@ -1006,8 +1005,8 @@ Constraint      = TypeVar ':' TypeIdent ;
     top-level !e                        Effect.runPromise(
                                             Effect.gen(function* () { ... }))
 
-    from M import f                     import { f } from 'M'
-    export f                            export { f }
+    from M import { f }                 import { f } from 'M'
+    export { f }                        export { f }
 
     -- Newtypes (branded):
     type UserId = String                class UserId extends Schema.Class<UserId>("UserId")({
