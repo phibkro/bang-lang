@@ -4,14 +4,14 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "types": ["bun-types"],
     "declaration": true,
     "sourceMap": true,
     "exactOptionalPropertyTypes": true,
     "moduleDetection": "force",
     "noEmit": true,
-    "plugins": [
-      { "name": "@effect/language-service" }
-    ]
+    "skipLibCheck": true,
+    "plugins": [{ "name": "@effect/language-service" }]
   },
   "include": ["src", "test"]
 }

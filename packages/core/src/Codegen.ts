@@ -3,6 +3,7 @@ import type * as Ast from "./Ast.js";
 import type { CompilerError } from "./CompilerError.js";
 import { CodegenError } from "./CompilerError.js";
 import * as SourceMap from "./SourceMap.js";
+import * as Span from "./Span.js";
 import type * as TypedAst from "./TypedAst.js";
 
 // ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ const writeBlankLine = (w: WriterState): WriterState => ({
 const pushIndent = (w: WriterState): WriterState => ({ ...w, indent: w.indent + 2 });
 const popIndent = (w: WriterState): WriterState => ({ ...w, indent: w.indent - 2 });
 
-const recordMapping = (w: WriterState, span: Ast.Span): WriterState => ({
+const recordMapping = (w: WriterState, span: Span.Span): WriterState => ({
   ...w,
   sourceMap: SourceMap.add(w.sourceMap, { line: w.currentLine, col: 0 }, span),
 });

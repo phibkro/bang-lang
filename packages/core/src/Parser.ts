@@ -114,7 +114,10 @@ const parseProgram = (s: ParseState): P<Ast.Program> =>
         if (atEnd) {
           const endT = yield* peek(st);
           return [
-            new Ast.Program({ statements: [...stmts], span: Span.merge(startSpan, tokenSpan(endT)) }),
+            new Ast.Program({
+              statements: [...stmts],
+              span: Span.merge(startSpan, tokenSpan(endT)),
+            }),
             st,
           ] as const;
         }
@@ -276,7 +279,10 @@ const parseApplication = (func: Ast.Expr, s: ParseState): P<Ast.Expr> =>
     const [args, s2] = yield* collectArgs([], s);
     const lastArg = args[args.length - 1];
     const endSpan = lastArg !== undefined ? lastArg.span : func.span;
-    return [new Ast.App({ func, args: [...args], span: Span.merge(func.span, endSpan) }), s2] as const;
+    return [
+      new Ast.App({ func, args: [...args], span: Span.merge(func.span, endSpan) }),
+      s2,
+    ] as const;
   });
 
 const isArgStart = (t: Token): boolean => {
@@ -318,7 +324,10 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
     }
     if (tag === "BoolLit") {
       const [tok, s1] = yield* advance(s);
-      return [new Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) }), s1] as const;
+      return [
+        new Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) }),
+        s1,
+      ] as const;
     }
     if (tag === "Unit") {
       const [tok, s1] = yield* advance(s);

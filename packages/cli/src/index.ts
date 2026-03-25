@@ -1,5 +1,5 @@
 import { Args, Command } from "@effect/cli";
-import { NodeContext, NodeRuntime } from "@effect/platform-node";
+import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect } from "effect";
 import { compileFile } from "./Compile.js";
 import { runFile } from "./Run.js";
@@ -18,4 +18,4 @@ const bang = Command.make("bang").pipe(Command.withSubcommands([compile, run]));
 
 const cli = Command.run(bang, { name: "bang", version: "0.0.1" });
 
-cli(process.argv).pipe(Effect.provide(NodeContext.layer), NodeRuntime.runMain);
+cli(process.argv).pipe(Effect.provide(BunContext.layer), BunRuntime.runMain);

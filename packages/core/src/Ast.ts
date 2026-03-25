@@ -94,12 +94,10 @@ export type Expr =
 // Statement nodes
 // ---------------------------------------------------------------------------
 
-const StmtSchema: Schema.Schema<Stmt> = Schema.suspend(() =>
-  Schema.Union(Declaration, Declare, ForceStatement, ExprStatement),
-);
+const StmtSchema = Schema.suspend(() => Schema.Union(Declaration, Declare, ForceStatement, ExprStatement));
 
 export class Program extends Schema.TaggedClass<Program>()("Program", {
-  statements: Schema.Array(Schema.suspend((): Schema.Schema<Stmt> => StmtSchema)),
+  statements: Schema.Array(Schema.suspend(() => StmtSchema)),
   span: Span,
 }) {}
 

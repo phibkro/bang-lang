@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { BunContext } from "@effect/platform-bun";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -19,7 +19,7 @@ greeting = "hello, bang"
 !console.log greeting`,
       );
 
-      yield* compileFile(inputPath).pipe(Effect.provide(NodeContext.layer));
+      yield* compileFile(inputPath).pipe(Effect.provide(BunContext.layer));
 
       const outputPath = path.join(tmpDir, "hello.ts");
       expect(fs.existsSync(outputPath)).toBe(true);
