@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect";
+import { Schema } from "effect";
 import { Span } from "./Span.js";
 
 // ---------------------------------------------------------------------------
@@ -80,7 +80,15 @@ export class Force extends Schema.TaggedClass<Force>()("Force", {
   span: Span,
 }) {}
 
-export type Expr = Ident | DotAccess | App | StringLiteral | IntLiteral | BoolLiteral | UnitLiteral | Force;
+export type Expr =
+  | Ident
+  | DotAccess
+  | App
+  | StringLiteral
+  | IntLiteral
+  | BoolLiteral
+  | UnitLiteral
+  | Force;
 
 // ---------------------------------------------------------------------------
 // Statement nodes
@@ -99,7 +107,9 @@ export class Declaration extends Schema.TaggedClass<Declaration>()("Declaration"
   name: Schema.String,
   mutable: Schema.Boolean,
   value: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
-  typeAnnotation: Schema.OptionFromUndefinedOr(Schema.suspend((): Schema.Schema<Type> => TypeSchema)),
+  typeAnnotation: Schema.OptionFromUndefinedOr(
+    Schema.suspend((): Schema.Schema<Type> => TypeSchema),
+  ),
   span: Span,
 }) {}
 
