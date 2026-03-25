@@ -1,7 +1,8 @@
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import * as Ast from "./Ast.js";
 import type { CompilerError } from "./CompilerError.js";
 import { CheckError } from "./CompilerError.js";
+import * as Span from "./Span.js";
 import type * as TypedAst from "./TypedAst.js";
 import { annotate } from "./TypedAst.js";
 
@@ -52,9 +53,9 @@ const finalReturnType = (type: Ast.Type): Ast.Type => {
 };
 
 /** A sentinel "unknown" type for expressions we can't fully type yet. */
-const unknownType: Ast.ConcreteType = Ast.ConcreteType({
+const unknownType: Ast.ConcreteType = new Ast.ConcreteType({
   name: "Unknown",
-  span: { startLine: 0, startCol: 0, startOffset: 0, endLine: 0, endCol: 0, endOffset: 0 },
+  span: Span.empty,
 });
 
 // ---------------------------------------------------------------------------
@@ -85,7 +86,7 @@ const checkProgram = (program: Ast.Program): TypedAst.TypedProgram => {
     } else if (stmt._tag === "Declaration") {
       scope.set(stmt.name, {
         name: stmt.name,
-        type: stmt.typeAnnotation,
+        type: Option.getOrUndefined(stmt.typeAnnotation),
         effectClass: classifyExpr(stmt.value, scope),
       });
     }
@@ -113,7 +114,7 @@ const checkStmt = (stmt: Ast.Stmt, scope: Map<string, ScopeEntry>): TypedAst.Typ
       validateExprScope(stmt.value, scope);
       const effectClass = classifyExpr(stmt.value, scope);
       return annotate(stmt, {
-        type: stmt.typeAnnotation ?? unknownType,
+        type: Option.getOrElse(stmt.typeAnnotation, () => unknownType),
         effectClass,
       });
     }

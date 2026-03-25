@@ -114,7 +114,7 @@ const parseProgram = (s: ParseState): P<Ast.Program> =>
         if (atEnd) {
           const endT = yield* peek(st);
           return [
-            Ast.Program({ statements: [...stmts], span: Span.merge(startSpan, tokenSpan(endT)) }),
+            new Ast.Program({ statements: [...stmts], span: Span.merge(startSpan, tokenSpan(endT)) }),
             st,
           ] as const;
         }
@@ -159,7 +159,7 @@ const parseDeclare = (s: ParseState): P<Ast.Declare> =>
     const [, s3] = yield* expect(s2, "Delimiter", ":");
     const [typeAnnotation, s4] = yield* parseType(s3);
     return [
-      Ast.Declare({
+      new Ast.Declare({
         name,
         typeAnnotation,
         span: Span.merge(tokenSpan(startTok), typeAnnotation.span),
@@ -193,11 +193,11 @@ const parseDeclaration = (s: ParseState): P<Ast.Declaration> =>
     const [, s2] = yield* expect(s1, "Operator", "=");
     const [value, s3] = yield* parseExpr(s2);
     return [
-      Ast.Declaration({
+      new Ast.Declaration({
         name: tokenValue(nameTok),
         mutable: false,
         value,
-        typeAnnotation: undefined,
+        typeAnnotation: Option.none(),
         span: Span.merge(tokenSpan(nameTok), value.span),
       }),
       s3,
@@ -212,9 +212,9 @@ const parseForceStatement = (s: ParseState): P<Ast.ForceStatement> =>
   Effect.gen(function* () {
     const [bangTok, s1] = yield* expect(s, "Operator", "!");
     const [expr, s2] = yield* parseExpr(s1);
-    const force = Ast.Force({ expr, span: Span.merge(tokenSpan(bangTok), expr.span) });
+    const force = new Ast.Force({ expr, span: Span.merge(tokenSpan(bangTok), expr.span) });
     return [
-      Ast.ForceStatement({ expr: force, span: Span.merge(tokenSpan(bangTok), expr.span) }),
+      new Ast.ForceStatement({ expr: force, span: Span.merge(tokenSpan(bangTok), expr.span) }),
       s2,
     ] as const;
   });
@@ -226,7 +226,7 @@ const parseForceStatement = (s: ParseState): P<Ast.ForceStatement> =>
 const parseExprStatement = (s: ParseState): P<Ast.ExprStatement> =>
   Effect.map(
     parseExpr(s),
-    ([expr, s1]) => [Ast.ExprStatement({ expr, span: expr.span }), s1] as const,
+    ([expr, s1]) => [new Ast.ExprStatement({ expr, span: expr.span }), s1] as const,
   );
 
 // ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@ const parseDotAccess = (expr: Ast.Expr, s: ParseState): P<Ast.Expr> =>
     if (atEnd || !isDot) return [expr, s] as const;
     const [, s1] = yield* advance(s);
     const [fieldTok, s2] = yield* expect(s1, "Ident");
-    const dotExpr = Ast.DotAccess({
+    const dotExpr = new Ast.DotAccess({
       object: expr,
       field: tokenValue(fieldTok),
       span: Span.merge(expr.span, tokenSpan(fieldTok)),
@@ -276,7 +276,7 @@ const parseApplication = (func: Ast.Expr, s: ParseState): P<Ast.Expr> =>
     const [args, s2] = yield* collectArgs([], s);
     const lastArg = args[args.length - 1];
     const endSpan = lastArg !== undefined ? lastArg.span : func.span;
-    return [Ast.App({ func, args: [...args], span: Span.merge(func.span, endSpan) }), s2] as const;
+    return [new Ast.App({ func, args: [...args], span: Span.merge(func.span, endSpan) }), s2] as const;
   });
 
 const isArgStart = (t: Token): boolean => {
@@ -299,30 +299,30 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
 
     if (tag === "Ident") {
       const [tok, s1] = yield* advance(s);
-      return [Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+      return [new Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
     }
     if (tag === "TypeIdent") {
       const [tok, s1] = yield* advance(s);
-      return [Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+      return [new Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
     }
     if (tag === "StringLit") {
       const [tok, s1] = yield* advance(s);
-      return [Ast.StringLiteral({ value: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+      return [new Ast.StringLiteral({ value: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
     }
     if (tag === "IntLit") {
       const [tok, s1] = yield* advance(s);
       return [
-        Ast.IntLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) }),
+        new Ast.IntLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) }),
         s1,
       ] as const;
     }
     if (tag === "BoolLit") {
       const [tok, s1] = yield* advance(s);
-      return [Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) }), s1] as const;
+      return [new Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) }), s1] as const;
     }
     if (tag === "Unit") {
       const [tok, s1] = yield* advance(s);
-      return [Ast.UnitLiteral({ span: tokenSpan(tok) }), s1] as const;
+      return [new Ast.UnitLiteral({ span: tokenSpan(tok) }), s1] as const;
     }
 
     return yield* fail(`Expected expression, got ${tokenDescription(t)}`, s);
@@ -341,7 +341,7 @@ const parseType = (s: ParseState): P<Ast.Type> =>
       const [, s2] = yield* advance(s1);
       const [result, s3] = yield* parseType(s2);
       return [
-        Ast.ArrowType({ param: left, result, span: Span.merge(left.span, result.span) }),
+        new Ast.ArrowType({ param: left, result, span: Span.merge(left.span, result.span) }),
         s3,
       ] as const;
     }
@@ -356,7 +356,7 @@ const parsePrimaryType = (s: ParseState): P<Ast.Type> =>
 
     if (tokenTag(t) === "TypeIdent") {
       const [tok, s1] = yield* advance(s);
-      return [Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+      return [new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
     }
 
     // {} in type position → ConcreteType("Unit")
@@ -369,7 +369,7 @@ const parsePrimaryType = (s: ParseState): P<Ast.Type> =>
               const [startTok, s1] = yield* advance(s);
               const [endTok, s2] = yield* advance(s1);
               return [
-                Ast.ConcreteType({
+                new Ast.ConcreteType({
                   name: "Unit",
                   span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
                 }),
@@ -394,7 +394,7 @@ const parseEffectType = (s: ParseState): P<Ast.EffectType> =>
     const [, s5] = yield* expect(s4, "Delimiter", "}");
     const [error, s6] = yield* parsePrimaryType(s5);
     return [
-      Ast.EffectType({ value, deps, error, span: Span.merge(tokenSpan(startTok), error.span) }),
+      new Ast.EffectType({ value, deps, error, span: Span.merge(tokenSpan(startTok), error.span) }),
       s6,
     ] as const;
   });
