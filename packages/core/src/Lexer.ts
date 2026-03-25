@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Chunk, Effect, Option } from "effect";
 import type { CompilerError } from "./CompilerError.js";
 import { LexError } from "./CompilerError.js";
 import * as Span from "./Span.js";
@@ -16,6 +16,10 @@ import {
   TypeIdent,
   Unit,
 } from "./Token.js";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const KEYWORDS = new Set([
   "mut",
@@ -37,249 +41,323 @@ const KEYWORDS = new Set([
   "race",
   "fork",
   "scoped",
+  "effect",
 ]);
 
 const DELIMITERS = new Set(["{", "}", "(", ")", "[", "]", ":", ";", ","]);
 
-const TWO_CHAR_OPS: Record<string, string> = {
-  "->": "->",
-  "<-": "<-",
-  "==": "==",
-  "!=": "!=",
-  "<=": "<=",
-  ">=": ">=",
-  "++": "++",
-};
+const TWO_CHAR_OPS: ReadonlyMap<string, string> = new Map([
+  ["->", "->"],
+  ["<-", "<-"],
+  ["==", "=="],
+  ["!=", "!="],
+  ["<=", "<="],
+  [">=", ">="],
+  ["++", "++"],
+]);
 
 const SINGLE_CHAR_OPS = new Set(["=", "!", ".", "+", "-", "*", "/", "%", "<", ">"]);
+
+// ---------------------------------------------------------------------------
+// Character predicates
+// ---------------------------------------------------------------------------
 
 const isLowerAlpha = (ch: string): boolean => ch >= "a" && ch <= "z";
 const isUpperAlpha = (ch: string): boolean => ch >= "A" && ch <= "Z";
 const isDigit = (ch: string): boolean => ch >= "0" && ch <= "9";
 const isAlphaNum = (ch: string): boolean => isLowerAlpha(ch) || isUpperAlpha(ch) || isDigit(ch);
+const isWhitespace = (ch: string): boolean =>
+  ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
 
-export const tokenize = (source: string): Effect.Effect<Token[], CompilerError> =>
-  Effect.gen(function* () {
-    const tokens: Token[] = [];
-    let offset = 0;
-    let line = 1;
-    let col = 0;
+// ---------------------------------------------------------------------------
+// Scanner state (immutable)
+// ---------------------------------------------------------------------------
 
-    const peek = (): string | undefined => source[offset];
-    const peekNext = (): string | undefined => source[offset + 1];
-    const advance = (): string => {
-      const ch = source[offset]!;
-      offset++;
-      if (ch === "\n") {
-        line++;
-        col = 0;
-      } else {
-        col++;
-      }
-      return ch;
-    };
+interface ScanState {
+  readonly source: string;
+  readonly offset: number;
+  readonly line: number;
+  readonly col: number;
+  readonly tokens: Chunk.Chunk<Token>;
+}
 
-    const makeSpan = (startLine: number, startCol: number, startOffset: number): Span.Span =>
-      Span.make({
-        startLine,
-        startCol,
-        startOffset,
-        endLine: line,
-        endCol: col,
-        endOffset: offset,
-      });
+const initialState = (source: string): ScanState => ({
+  source,
+  offset: 0,
+  line: 1,
+  col: 0,
+  tokens: Chunk.empty(),
+});
 
-    while (offset < source.length) {
-      const ch = peek()!;
+// ---------------------------------------------------------------------------
+// State helpers (pure — return new state)
+// ---------------------------------------------------------------------------
 
-      // Skip whitespace
-      if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
-        advance();
-        continue;
-      }
+const peek = (s: ScanState): Option.Option<string> => Option.fromNullable(s.source[s.offset]);
 
-      // Skip line comments
-      if (ch === "/" && peekNext() === "/") {
-        while (offset < source.length && peek() !== "\n") {
-          advance();
-        }
-        continue;
-      }
+const peekAt = (s: ScanState, ahead: number): Option.Option<string> =>
+  Option.fromNullable(s.source[s.offset + ahead]);
 
-      const startLine = line;
-      const startCol = col;
-      const startOffset = offset;
+const advance = (s: ScanState): ScanState => {
+  const ch = s.source[s.offset];
+  return ch === "\n"
+    ? { ...s, offset: s.offset + 1, line: s.line + 1, col: 0 }
+    : { ...s, offset: s.offset + 1, col: s.col + 1 };
+};
 
-      // String literal
-      if (ch === '"') {
-        advance(); // opening quote
-        let value = "";
-        while (offset < source.length && peek() !== '"') {
-          if (peek() === "\n") {
-            return yield* Effect.fail(
-              LexError({
-                message: "Unterminated string literal",
-                span: makeSpan(startLine, startCol, startOffset),
-              }),
-            );
-          }
-          value += advance();
-        }
-        if (offset >= source.length) {
-          return yield* Effect.fail(
+const advanceN = (s: ScanState, n: number): ScanState => {
+  if (n <= 0) return s;
+  return advanceN(advance(s), n - 1);
+};
+
+const makeSpan = (
+  startLine: number,
+  startCol: number,
+  startOffset: number,
+  s: ScanState,
+): Span.Span =>
+  Span.make({
+    startLine,
+    startCol,
+    startOffset,
+    endLine: s.line,
+    endCol: s.col,
+    endOffset: s.offset,
+  });
+
+const emit = (s: ScanState, token: Token): ScanState => ({
+  ...s,
+  tokens: Chunk.append(s.tokens, token),
+});
+
+// ---------------------------------------------------------------------------
+// Scanning primitives (pure — return [value, newState])
+// ---------------------------------------------------------------------------
+
+const consumeWhile = (
+  s: ScanState,
+  pred: (ch: string) => boolean,
+): readonly [string, ScanState] => {
+  const go = (acc: string, st: ScanState): readonly [string, ScanState] =>
+    Option.match(peek(st), {
+      onNone: () => [acc, st] as const,
+      onSome: (ch) => (pred(ch) ? go(acc + ch, advance(st)) : ([acc, st] as const)),
+    });
+  return go("", s);
+};
+
+const skipWhile = (s: ScanState, pred: (ch: string) => boolean): ScanState =>
+  Option.match(peek(s), {
+    onNone: () => s,
+    onSome: (ch) => (pred(ch) ? skipWhile(advance(s), pred) : s),
+  });
+
+// ---------------------------------------------------------------------------
+// Token scanners (each returns Effect<ScanState, CompilerError>)
+// ---------------------------------------------------------------------------
+
+const scanString = (
+  s: ScanState,
+  startLine: number,
+  startCol: number,
+  startOffset: number,
+): Effect.Effect<ScanState, CompilerError> => {
+  const s1 = advance(s); // skip opening quote
+  const go = (acc: string, st: ScanState): Effect.Effect<ScanState, CompilerError> =>
+    Option.match(peek(st), {
+      onNone: () =>
+        Effect.fail(
+          LexError({
+            message: "Unterminated string literal",
+            span: makeSpan(startLine, startCol, startOffset, st),
+          }),
+        ),
+      onSome: (ch) => {
+        if (ch === "\n") {
+          return Effect.fail(
             LexError({
               message: "Unterminated string literal",
-              span: makeSpan(startLine, startCol, startOffset),
+              span: makeSpan(startLine, startCol, startOffset, st),
             }),
           );
         }
-        advance(); // closing quote
-        tokens.push(
-          StringLit({
-            value,
-            span: makeSpan(startLine, startCol, startOffset),
-          }),
-        );
-        continue;
+        if (ch === '"') {
+          const s2 = advance(st);
+          return Effect.succeed(
+            emit(
+              s2,
+              StringLit({ value: acc, span: makeSpan(startLine, startCol, startOffset, s2) }),
+            ),
+          );
+        }
+        return go(acc + ch, advance(st));
+      },
+    });
+  return go("", s1);
+};
+
+const scanNumber = (
+  s: ScanState,
+  startLine: number,
+  startCol: number,
+  startOffset: number,
+): ScanState => {
+  const [intPart, s1] = consumeWhile(s, isDigit);
+  const hasDot =
+    Option.isSome(peek(s1)) &&
+    Option.getOrElse(peek(s1), () => "") === "." &&
+    Option.match(peekAt(s1, 1), { onNone: () => false, onSome: isDigit });
+  if (hasDot) {
+    const s2 = advance(s1); // skip dot
+    const [fracPart, s3] = consumeWhile(s2, isDigit);
+    return emit(
+      s3,
+      FloatLit({
+        value: `${intPart}.${fracPart}`,
+        span: makeSpan(startLine, startCol, startOffset, s3),
+      }),
+    );
+  }
+  return emit(s1, IntLit({ value: intPart, span: makeSpan(startLine, startCol, startOffset, s1) }));
+};
+
+const scanLowerIdent = (
+  s: ScanState,
+  startLine: number,
+  startCol: number,
+  startOffset: number,
+): ScanState => {
+  const [value, s1] = consumeWhile(s, isAlphaNum);
+  const span = makeSpan(startLine, startCol, startOffset, s1);
+  if (value === "true") return emit(s1, BoolLit({ value: true, span }));
+  if (value === "false") return emit(s1, BoolLit({ value: false, span }));
+  if (KEYWORDS.has(value)) return emit(s1, Keyword({ value, span }));
+  return emit(s1, Ident({ value, span }));
+};
+
+const scanUpperIdent = (
+  s: ScanState,
+  startLine: number,
+  startCol: number,
+  startOffset: number,
+): ScanState => {
+  const [value, s1] = consumeWhile(s, isAlphaNum);
+  return emit(s1, TypeIdent({ value, span: makeSpan(startLine, startCol, startOffset, s1) }));
+};
+
+// ---------------------------------------------------------------------------
+// Main scanner step (one token per call)
+// ---------------------------------------------------------------------------
+
+const scanOneToken = (s: ScanState): Effect.Effect<ScanState, CompilerError> => {
+  // Skip whitespace
+  const s0 = skipWhile(s, isWhitespace);
+
+  // Skip line comments
+  const s1 = Option.match(peek(s0), {
+    onNone: () => s0,
+    onSome: (ch) =>
+      ch === "/" && Option.getOrElse(peekAt(s0, 1), () => "") === "/"
+        ? skipWhile(s0, (c) => c !== "\n")
+        : s0,
+  });
+
+  // Re-skip whitespace after comment
+  const state = skipWhile(s1, isWhitespace);
+
+  return Option.match(peek(state), {
+    onNone: () => Effect.succeed(state), // EOF — handled after loop
+    onSome: (ch) => {
+      const startLine = state.line;
+      const startCol = state.col;
+      const startOffset = state.offset;
+
+      // String literal
+      if (ch === '"') {
+        return scanString(state, startLine, startCol, startOffset);
       }
 
       // Number literal
       if (isDigit(ch)) {
-        let value = "";
-        while (offset < source.length && isDigit(peek()!)) {
-          value += advance();
-        }
-        if (
-          offset < source.length &&
-          peek() === "." &&
-          peekNext() !== undefined &&
-          isDigit(peekNext()!)
-        ) {
-          value += advance(); // the dot
-          while (offset < source.length && isDigit(peek()!)) {
-            value += advance();
-          }
-          tokens.push(
-            FloatLit({
-              value,
-              span: makeSpan(startLine, startCol, startOffset),
-            }),
-          );
-        } else {
-          tokens.push(
-            IntLit({
-              value,
-              span: makeSpan(startLine, startCol, startOffset),
-            }),
-          );
-        }
-        continue;
+        return Effect.succeed(scanNumber(state, startLine, startCol, startOffset));
       }
 
       // Lowercase identifier / keyword / bool
       if (isLowerAlpha(ch)) {
-        let value = "";
-        while (offset < source.length && isAlphaNum(peek()!)) {
-          value += advance();
-        }
-        const span = makeSpan(startLine, startCol, startOffset);
-        if (value === "true") {
-          tokens.push(BoolLit({ value: true, span }));
-        } else if (value === "false") {
-          tokens.push(BoolLit({ value: false, span }));
-        } else if (KEYWORDS.has(value)) {
-          tokens.push(Keyword({ value, span }));
-        } else {
-          tokens.push(Ident({ value, span }));
-        }
-        continue;
+        return Effect.succeed(scanLowerIdent(state, startLine, startCol, startOffset));
       }
 
       // Uppercase identifier (type)
       if (isUpperAlpha(ch)) {
-        let value = "";
-        while (offset < source.length && isAlphaNum(peek()!)) {
-          value += advance();
-        }
-        tokens.push(
-          TypeIdent({
-            value,
-            span: makeSpan(startLine, startCol, startOffset),
-          }),
-        );
-        continue;
+        return Effect.succeed(scanUpperIdent(state, startLine, startCol, startOffset));
       }
 
       // Unit literal: ()
-      if (ch === "(" && peekNext() === ")") {
-        advance();
-        advance();
-        tokens.push(Unit({ span: makeSpan(startLine, startCol, startOffset) }));
-        continue;
+      if (ch === "(" && Option.getOrElse(peekAt(state, 1), () => "") === ")") {
+        const s2 = advanceN(state, 2);
+        return Effect.succeed(
+          emit(s2, Unit({ span: makeSpan(startLine, startCol, startOffset, s2) })),
+        );
       }
 
       // Delimiters
       if (DELIMITERS.has(ch)) {
-        advance();
-        tokens.push(
-          Delimiter({
-            value: ch,
-            span: makeSpan(startLine, startCol, startOffset),
-          }),
+        const s2 = advance(state);
+        return Effect.succeed(
+          emit(s2, Delimiter({ value: ch, span: makeSpan(startLine, startCol, startOffset, s2) })),
         );
-        continue;
       }
 
       // Two-char operators
-      if (offset + 1 < source.length) {
-        const twoChar = ch + source[offset + 1];
-        if (twoChar in TWO_CHAR_OPS) {
-          advance();
-          advance();
-          tokens.push(
-            Operator({
-              value: twoChar,
-              span: makeSpan(startLine, startCol, startOffset),
-            }),
-          );
-          continue;
-        }
+      const twoChar = ch + Option.getOrElse(peekAt(state, 1), () => "");
+      if (TWO_CHAR_OPS.has(twoChar)) {
+        const s2 = advanceN(state, 2);
+        return Effect.succeed(
+          emit(
+            s2,
+            Operator({ value: twoChar, span: makeSpan(startLine, startCol, startOffset, s2) }),
+          ),
+        );
       }
 
       // Single-char operators
       if (SINGLE_CHAR_OPS.has(ch)) {
-        advance();
-        tokens.push(
-          Operator({
-            value: ch,
-            span: makeSpan(startLine, startCol, startOffset),
-          }),
+        const s2 = advance(state);
+        return Effect.succeed(
+          emit(s2, Operator({ value: ch, span: makeSpan(startLine, startCol, startOffset, s2) })),
         );
-        continue;
       }
 
       // Unknown character
-      advance();
-      return yield* Effect.fail(
+      const s2 = advance(state);
+      return Effect.fail(
         LexError({
           message: `Unexpected character: '${ch}'`,
-          span: makeSpan(startLine, startCol, startOffset),
+          span: makeSpan(startLine, startCol, startOffset, s2),
         }),
       );
-    }
-
-    tokens.push(
-      EOF({
-        span: Span.make({
-          startLine: line,
-          startCol: col,
-          startOffset: offset,
-          endLine: line,
-          endCol: col,
-          endOffset: offset,
-        }),
-      }),
-    );
-
-    return tokens;
+    },
   });
+};
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+export const tokenize = (source: string): Effect.Effect<Token[], CompilerError> =>
+  Effect.iterate(initialState(source), {
+    while: (s) => s.offset < s.source.length,
+    body: scanOneToken,
+  }).pipe(
+    Effect.map((finalState) => {
+      const eofSpan = Span.make({
+        startLine: finalState.line,
+        startCol: finalState.col,
+        startOffset: finalState.offset,
+        endLine: finalState.line,
+        endCol: finalState.col,
+        endOffset: finalState.offset,
+      });
+      return [...Chunk.toArray(finalState.tokens), EOF({ span: eofSpan })];
+    }),
+  );
