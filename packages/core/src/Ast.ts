@@ -36,7 +36,7 @@ export type Type = ConcreteType | ArrowType | EffectType;
 
 // Forward-declare recursive Expr schema
 const ExprSchema: Schema.Schema<Expr> = Schema.suspend(() =>
-  Schema.Union(Ident, DotAccess, App, StringLiteral, IntLiteral, BoolLiteral, UnitLiteral, Force),
+  Schema.Union(Ident, DotAccess, App, StringLiteral, IntLiteral, FloatLiteral, BoolLiteral, UnitLiteral, Force, Block, Lambda, BinaryExpr, UnaryExpr, StringInterp),
 );
 
 export class Ident extends Schema.TaggedClass<Ident>()("Ident", {
@@ -80,15 +80,67 @@ export class Force extends Schema.TaggedClass<Force>()("Force", {
   span: Span,
 }) {}
 
+export class FloatLiteral extends Schema.TaggedClass<FloatLiteral>()("FloatLiteral", {
+  value: Schema.Number,
+  span: Span,
+}) {}
+
+export class Block extends Schema.TaggedClass<Block>()("Block", {
+  statements: Schema.Array(Schema.suspend(() => StmtSchema)),
+  expr: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
+export class Lambda extends Schema.TaggedClass<Lambda>()("Lambda", {
+  params: Schema.Array(Schema.String),
+  body: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
+export class BinaryExpr extends Schema.TaggedClass<BinaryExpr>()("BinaryExpr", {
+  op: Schema.String,
+  left: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  right: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
+export class UnaryExpr extends Schema.TaggedClass<UnaryExpr>()("UnaryExpr", {
+  op: Schema.String,
+  expr: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
+export class InterpText extends Schema.TaggedClass<InterpText>()("InterpText", {
+  value: Schema.String,
+}) {}
+
+export class InterpExpr extends Schema.TaggedClass<InterpExpr>()("InterpExpr", {
+  value: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+}) {}
+
+export type InterpPart = InterpText | InterpExpr;
+const InterpPartSchema = Schema.Union(InterpText, InterpExpr);
+
+export class StringInterp extends Schema.TaggedClass<StringInterp>()("StringInterp", {
+  parts: Schema.Array(Schema.suspend(() => InterpPartSchema)),
+  span: Span,
+}) {}
+
 export type Expr =
   | Ident
   | DotAccess
   | App
   | StringLiteral
   | IntLiteral
+  | FloatLiteral
   | BoolLiteral
   | UnitLiteral
-  | Force;
+  | Force
+  | Block
+  | Lambda
+  | BinaryExpr
+  | UnaryExpr
+  | StringInterp;
 
 // ---------------------------------------------------------------------------
 // Statement nodes
@@ -129,4 +181,4 @@ export class ExprStatement extends Schema.TaggedClass<ExprStatement>()("ExprStat
 
 export type Stmt = Declaration | Declare | ForceStatement | ExprStatement;
 
-export type Node = Program | Stmt | Expr | Type;
+export type Node = Program | Stmt | Expr | Type | InterpPart;
