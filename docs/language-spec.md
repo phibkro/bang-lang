@@ -63,8 +63,34 @@ Declaration     = 'mut'? Ident '=' Expr
     type Name = String              -- distinct from UserId despite same rep
     type Pair A B = (A, B)         -- parameterised type alias
 
+    TYPE SYSTEM: NOMINAL vs STRUCTURAL
+    ───────────────────────────────────
+    'type' declarations create NOMINAL types.
     Two types with the same underlying representation
     are never automatically coerced. Coercion is always explicit.
+
+    type UserId = String
+    type Name = String
+    -- UserId ≠ Name ≠ String. All three are distinct types.
+
+    Coercion requires explicit constructor/destructor:
+    userId = UserId "abc"           -- wrap: String -> UserId
+    raw = UserId.unwrap userId      -- unwrap: UserId -> String
+
+    Anonymous types (records, tuples, functions, effects) are STRUCTURAL.
+    Two anonymous types with the same shape are the same type:
+    { name: String, age: Int } == { name: String, age: Int }
+    (String -> Int) == (String -> Int)
+
+    EQUALITY
+    ────────
+    == requires operands of the same type.
+    Cross-type comparison is a type error:
+    userId == name                  -- TYPE ERROR: UserId ≠ Name
+    userId1 == userId2              -- OK: same type
+
+    Value equality delegates to the underlying representation.
+    Effect's Equal trait is the mechanism for custom equality.
 *)
 
 
@@ -203,7 +229,6 @@ Expr            = Expr '.' Ident Atom*              (* composition / field acces
                 | Match                             (* pattern match *)
                 | Lambda                            (* anonymous function *)
                 | Transaction                       (* atomic block *)
-                | Concurrent                        (* concurrent force *)
                 | '(' Expr ')'                      (* grouping *)
                 ;
 
@@ -304,29 +329,35 @@ Transaction     = '!' 'transaction' Block ;
 
 
 (* ─────────────────────────────────────────
-   CONCURRENT EXPRESSIONS
+   CONCURRENCY
    ───────────────────────────────────────── *)
 
-Concurrent      = '!' '[' Expr (',' Expr)* ']'
-                | '!' 'race' '[' Expr (',' Expr)* ']'
-                | '!' 'fork' Expr
-                ;
-
 (*
-    ![ e1, e2, ... ]
+    Concurrency is provided by the STANDARD LIBRARY, not special syntax.
+    These are regular functions called with the force operator:
+
+    from STD.CONCURRENT import all, race, fork
+
+    !all [e1, e2, ...]
     Force all concurrently. Returns tuple of all results.
+    all : List (Effect A D E) -> Effect (List A) D E
     Compiles to:
     yield* Effect.all([e1, e2, ...], { concurrency: 'unbounded' })
 
-    !race [ e1, e2, ... ]
+    !race [e1, e2, ...]
     Force concurrently. Returns first result, cancels rest.
+    race : List (Effect A D E) -> Effect A D E
     Compiles to:
     yield* Effect.race(e1, e2, ...)
 
     !fork e
     Fork into background fiber. Returns Fiber handle.
+    fork : Effect A D E -> Effect (Fiber A E) {} {}
     Compiles to:
     yield* Effect.fork(e)
+
+    No special grammar is needed. The force operator ! handles
+    these like any other Effect-returning function.
 *)
 
 
@@ -536,8 +567,10 @@ Constraint      = TypeVar ':' TypeIdent ;
     and             or              xor
     where           forall          defer
     true            false           if
-    transaction     race            fork
-    scoped
+    transaction     scoped
+
+    Note: race, fork, all are standard library functions,
+    not keywords. They are regular identifiers.
 *)
 
 
@@ -603,12 +636,13 @@ Constraint      = TypeVar ':' TypeIdent ;
     !transaction { }                    yield* STM.commit(
                                             STM.gen(function* () { }))
 
-    ![ e1, e2 ]                         yield* Effect.all([e1, e2],
-                                            { concurrency: 'unbounded' })
-    !race [ e1, e2 ]                    yield* Effect.race(e1, e2)
-    !fork e                             yield* Effect.fork(e)
-
     defer !e                            yield* Effect.addFinalizer(() => e)
+
+    -- Concurrency (standard library, not syntax):
+    !all [e1, e2]                       yield* Effect.all([e1, e2],
+                                            { concurrency: 'unbounded' })
+    !race [e1, e2]                      yield* Effect.race(e1, e2)
+    !fork e                             yield* Effect.fork(e)
 
     declare f : A -> Effect B { r } E   // TypeScript declaration
                                         // resolved at ! call sites
@@ -622,6 +656,8 @@ Constraint      = TypeVar ':' TypeIdent ;
     type UserId = String                type UserId = string
                                         & Brand.Brand<'UserId'>
                                         const UserId = Brand.nominal<UserId>()
+    UserId "abc"                        UserId("abc")   -- wrap
+    UserId.unwrap userId                userId           -- unwrap (type cast)
 
     type Pair A B = (A, B)             type Pair<A, B> = [A, B]
 *)
