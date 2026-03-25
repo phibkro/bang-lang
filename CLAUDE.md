@@ -13,6 +13,7 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (library), `@bang/cli` (CLI
 ## Language Design
 
 Key concepts (see `docs/language-spec.md` for full spec):
+
 - `Effect A E R` — A=value, E=error effects, R=dependency effects. Both E and R are algebraic effects.
 - `effect` declarations define interfaces. Implementations are first-class values, handling is always explicit via `.handle`.
 - `.handle`, `.catch`, `.map` — composable channel handlers via dot syntax, not keywords.
@@ -29,22 +30,29 @@ Phases composed in `Compiler.ts`. Each phase produces a distinct type (Token[] �
 
 ## Patterns
 
-- Tokens use `Schema.TaggedClass` with `Schema.Union` for the union type
-- AST nodes use `Schema.TaggedClass` (migrating from plain interfaces)
-- CompilerError uses `Schema.TaggedError` (migrating from `Data.TaggedEnum`)
-- Parser/Checker/Codegen use `Effect.gen` with `Effect.fail` for errors
+- All domain types use `Schema.TaggedClass` (Token, AST, Span) or `Schema.TaggedError` (CompilerError)
+- Recursive AST types use `Schema.suspend` for forward references
+- All dispatch uses `Match.tag` with `Match.exhaustive` — no switch/case on `_tag`
+- Checker uses `HashMap` for scope, `Option` for nullable values, `Effect.fail` for errors
+- Codegen uses immutable `WriterState` accumulator — no mutable class
+- Lexer uses combinator pattern: `Recognizer = (ScanState) => Option<[Token, ScanState]>` with `firstOf` composition
+- Parser uses immutable `ParseState` with all primitives returning `Effect`
 - `declare` generates wrapper functions in codegen; `!` always means `yield*`
 - Tests use `@effect/vitest` (`it.effect` for effectful tests)
+- ESLint: `eslint-plugin-functional` + `@effect/eslint-plugin` + `typescript-eslint/strict`
+- Pre-commit: `vp staged` runs `vp check --fix` + `npx eslint --fix` on staged .ts files
 
 ## Effect Style Rules
 
 Strict (enforce):
+
 - Schema.TaggedClass for all domain types (AST, errors, tokens)
 - Match.tag with Match.exhaustive for AST/token dispatch
 - Effect.fail over throw; Option over undefined for nullable fields
 - HashMap over mutable Map; Schema.is() and Either.isLeft() in tests
 
 Pragmatic (skip):
+
 - Character predicates (isDigit, isAlpha) stay as simple boolean functions
 - if/else guards in Effect.gen for early returns are fine
 - Internal-only state types (ScanState, ParseState) stay as plain interfaces
