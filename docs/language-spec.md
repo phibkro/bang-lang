@@ -572,6 +572,7 @@ ModulePath      = TypeIdent ('.' TypeIdent)* ;
 
 Expr            = Expr '.' Ident Atom*              (* composition / field access *)
                 | Expr Atom+                        (* application by juxtaposition *)
+                | '-' Expr                          (* unary minus *)
                 | Expr ('*' | '/' | '%') Expr       (* multiplicative *)
                 | Expr ('+' | '-' | '++') Expr      (* additive *)
                 | Expr CompOp Expr                  (* comparison *)
@@ -776,9 +777,36 @@ Literal         = Integer
 
 Integer         = [0-9]+ ;
 Float           = [0-9]+ '.' [0-9]+ ;
-String          = '"' [^"]* '"' ;
+String          = '"' StringPart* '"' ;
+StringPart      = [^"\\$]+                      (* plain text *)
+                | '\\' [nrtv0\\"]               (* escape sequence *)
+                | '${' Expr '}'                 (* interpolation *)
+                ;
 Bool            = 'true' | 'false' ;
 List            = '[' (Expr (',' Expr)*)? ']' ;
+
+(*
+    STRING INTERPOLATION
+    ────────────────────
+    Expressions inside ${} are evaluated and converted to String.
+    Force (!) works inside interpolation:
+
+    name = "world"
+    greeting = "hello ${name}"              -- "hello world"
+    msg = "user: ${!getUser 42 .name}"      -- forces effect, accesses field
+
+    Escape sequences (same as JS):
+    \n   newline
+    \r   carriage return
+    \t   tab
+    \v   vertical tab
+    \0   null
+    \\   backslash
+    \"   double quote
+
+    Interpolation compiles to template literals in Effect TS:
+    "hello ${name}" → `hello ${name}`
+*)
 Unit            = '()' ;
 
 
