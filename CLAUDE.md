@@ -4,10 +4,10 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (library), `@bang/cli` (CLI
 
 ## Commands
 
-- `vp check` — format + lint (use instead of separate commands)
-- `vp check --fix` — auto-fix formatting
-- `vp test packages/core` — run core tests (shows "no tests" in summary; ignore, check exit code or use `npx vitest run` for accurate counts)
-- `npx vitest run` — direct test runner with accurate test counts
+- `vp check --fix` — format + Oxlint (auto-fix)
+- `vp run lint` — ESLint with Effect/functional rules (auto-fix)
+- `vp run check` — tsc + ESLint (full verification)
+- `vp test packages/core` — run core tests (shows "no tests" in summary; use `npx vitest run` for accurate counts)
 - `bun run packages/cli/src/index.ts compile examples/hello.bang` — test CLI manually
 
 ## Language Design
@@ -59,9 +59,21 @@ Pragmatic (skip):
 - Constant Sets (KEYWORDS, DELIMITERS) stay as `new Set()`
 - Pure string operations stay as-is
 
+## Key Files
+
+- `packages/core/src/Compiler.ts` — pipeline entry: compose(lex, parse, check, codegen)
+- `packages/core/src/Ast.ts` — Schema.TaggedClass nodes with Schema.suspend for recursion
+- `packages/core/src/Token.ts` — Schema.TaggedClass token types
+- `packages/cli/src/index.ts` — CLI entry point (@effect/cli)
+
+## Status
+
+v0.1 complete: declare, bindings, !, function application, dot access, basic codegen.
+Next: blocks, lambdas, binary operators, string interpolation (v0.2).
+
 ## Specs & Plans
 
 - Language spec: `docs/language-spec.md` (EBNF v0.2)
 - Design spec: `docs/superpowers/specs/2026-03-25-bang-compiler-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-03-25-bang-compiler-v0.1.md`
+- Implementation plan: `docs/superpowers/plans/2026-03-25-bang-compiler-v0.1.md` (completed)
 - Effect repo: `~/Projects/Repos/effect` — reference for idiomatic Effect patterns

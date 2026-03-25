@@ -61,7 +61,9 @@ const writerToString = (w: WriterState): string => w.lines.join("\n") + "\n";
 const buildDottedName = (expr: Ast.Expr): Option.Option<string> =>
   Match.value(expr).pipe(
     Match.tag("Ident", (e) => Option.some(e.name)),
-    Match.tag("DotAccess", (e) => Option.map(buildDottedName(e.object), (obj) => `${obj}.${e.field}`)),
+    Match.tag("DotAccess", (e) =>
+      Option.map(buildDottedName(e.object), (obj) => `${obj}.${e.field}`),
+    ),
     Match.orElse(() => Option.none()),
   );
 
@@ -179,7 +181,10 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
             const paramList = params.join(", ");
             const w2 = recordMapping(w, node.span);
             return writeBlankLine(
-              writeLine(w2, `const ${info.wrapperName} = (${paramList}) => Effect.sync(() => ${node.name}(${paramList}))`),
+              writeLine(
+                w2,
+                `const ${info.wrapperName} = (${paramList}) => Effect.sync(() => ${node.name}(${paramList}))`,
+              ),
             );
           },
         }),

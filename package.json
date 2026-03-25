@@ -7,9 +7,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest",
-    "check": "tsc -b packages/core/tsconfig.json packages/cli/tsconfig.json",
-    "lint": "eslint packages/*/src/",
-    "lint:fix": "eslint packages/*/src/ --fix"
+    "check": "tsc -b packages/core/tsconfig.json packages/cli/tsconfig.json && eslint packages/core/src/ packages/cli/src/ --fix",
+    "lint": "eslint packages/core/src/ packages/cli/src/ --fix"
   },
   "devDependencies": {
     "@effect/eslint-plugin": "^0.3.2",
