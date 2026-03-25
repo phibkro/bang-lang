@@ -4,7 +4,7 @@ import { ErrorFormatter, CompilerError, Span } from "@bang/core";
 describe("ErrorFormatter", () => {
   it("formats a lex error with source context", () => {
     const source = 'greeting = "hello';
-    const error = CompilerError.LexError({
+    const error = new CompilerError.LexError({
       message: "Unterminated string literal",
       span: Span.make({
         startLine: 1,
@@ -26,7 +26,7 @@ describe("ErrorFormatter", () => {
 
   it("formats errors with line numbers", () => {
     const source = "line1\nline2\nline3";
-    const error = CompilerError.ParseError({
+    const error = new CompilerError.ParseError({
       message: "Unexpected token",
       span: Span.make({
         startLine: 2,
@@ -45,7 +45,7 @@ describe("ErrorFormatter", () => {
   it("formats multiple errors with separation", () => {
     const source = 'x = "hello\ny = "world';
     const errors = [
-      CompilerError.LexError({
+      new CompilerError.LexError({
         message: "Unterminated string",
         span: Span.make({
           startLine: 1,
@@ -56,7 +56,7 @@ describe("ErrorFormatter", () => {
           endOffset: 10,
         }),
       }),
-      CompilerError.LexError({
+      new CompilerError.LexError({
         message: "Unterminated string",
         span: Span.make({
           startLine: 2,

@@ -291,7 +291,7 @@ export const tokenize = (source: string): Effect.Effect<Token[], CompilerError> 
           const message =
             ch === '"' ? "Unterminated string literal" : `Unexpected character: '${ch}'`;
           return Effect.fail(
-            LexError({
+            new LexError({
               message,
               span: makeSpan(cleaned, s1),
             }),

@@ -154,7 +154,7 @@ const checkStmt = (stmt: Ast.Stmt, scope: Map<string, ScopeEntry>): TypedAst.Typ
       const entry = name !== undefined ? scope.get(name) : undefined;
 
       if (entry !== undefined && entry.effectClass === "effect") {
-        throw CheckError({
+        throw new CheckError({
           message: `Effect-typed expression used in statement position without "!"`,
           span: stmt.span,
           hint: `Did you mean to use ! to force this effect?`,
@@ -209,7 +209,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Map<string, ScopeEntry>): void
     case "Ident": {
       // Check if it's a standalone identifier in scope, or part of a dotted name
       if (!scope.has(expr.name)) {
-        throw CheckError({
+        throw new CheckError({
           message: `Undeclared identifier: ${expr.name}`,
           span: expr.span,
         });
@@ -221,7 +221,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Map<string, ScopeEntry>): void
       const name = buildDottedName(expr);
       if (name !== undefined) {
         if (!scope.has(name)) {
-          throw CheckError({
+          throw new CheckError({
             message: `Undeclared identifier: ${name}`,
             span: expr.span,
           });

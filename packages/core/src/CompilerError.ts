@@ -1,28 +1,29 @@
-import { Data } from "effect";
-import type { Span } from "./Span.js";
+import { Schema } from "effect";
 
-export type CompilerError = Data.TaggedEnum<{
-  LexError: {
-    readonly message: string;
-    readonly span: Span;
-    readonly hint?: string | undefined;
-  };
-  ParseError: {
-    readonly message: string;
-    readonly span: Span;
-    readonly hint?: string | undefined;
-  };
-  CheckError: {
-    readonly message: string;
-    readonly span: Span;
-    readonly hint?: string | undefined;
-  };
-  CodegenError: {
-    readonly message: string;
-    readonly span: Span;
-    readonly hint?: string | undefined;
-  };
-}>;
+export class LexError extends Schema.TaggedError<LexError>()("LexError", {
+  message: Schema.String,
+  span: Schema.Any,
+  hint: Schema.optional(Schema.String),
+}) {}
 
-export const { LexError, ParseError, CheckError, CodegenError, $is, $match } =
-  Data.taggedEnum<CompilerError>();
+export class ParseError extends Schema.TaggedError<ParseError>()("ParseError", {
+  message: Schema.String,
+  span: Schema.Any,
+  hint: Schema.optional(Schema.String),
+}) {}
+
+export class CheckError extends Schema.TaggedError<CheckError>()("CheckError", {
+  message: Schema.String,
+  span: Schema.Any,
+  hint: Schema.optional(Schema.String),
+}) {}
+
+export class CodegenError extends Schema.TaggedError<CodegenError>()("CodegenError", {
+  message: Schema.String,
+  span: Schema.Any,
+  hint: Schema.optional(Schema.String),
+}) {}
+
+export type CompilerError = LexError | ParseError | CheckError | CodegenError;
+
+export const CompilerErrorSchema = Schema.Union(LexError, ParseError, CheckError, CodegenError);

@@ -29,11 +29,27 @@ Phases composed in `Compiler.ts`. Each phase produces a distinct type (Token[] â
 
 ## Patterns
 
-- AST uses plain interfaces + factory functions (not `Data.TaggedEnum` â€” recursive types aren't supported)
-- Tokens and CompilerError use `Data.TaggedEnum` (flat, non-recursive)
-- Parser/Checker use synchronous internals wrapped in `Effect.try` at the boundary
+- Tokens use `Schema.TaggedClass` with `Schema.Union` for the union type
+- AST nodes use `Schema.TaggedClass` (migrating from plain interfaces)
+- CompilerError uses `Schema.TaggedError` (migrating from `Data.TaggedEnum`)
+- Parser/Checker/Codegen use `Effect.gen` with `Effect.fail` for errors
 - `declare` generates wrapper functions in codegen; `!` always means `yield*`
 - Tests use `@effect/vitest` (`it.effect` for effectful tests)
+
+## Effect Style Rules
+
+Strict (enforce):
+- Schema.TaggedClass for all domain types (AST, errors, tokens)
+- Match.tag with Match.exhaustive for AST/token dispatch
+- Effect.fail over throw; Option over undefined for nullable fields
+- HashMap over mutable Map; Schema.is() and Either.isLeft() in tests
+
+Pragmatic (skip):
+- Character predicates (isDigit, isAlpha) stay as simple boolean functions
+- if/else guards in Effect.gen for early returns are fine
+- Internal-only state types (ScanState, ParseState) stay as plain interfaces
+- Constant Sets (KEYWORDS, DELIMITERS) stay as `new Set()`
+- Pure string operations stay as-is
 
 ## Specs & Plans
 

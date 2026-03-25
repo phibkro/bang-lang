@@ -87,7 +87,7 @@ const expect = (s: ParseState, tag: string, value?: string): P<Token> =>
       const t = yield* peek(s);
       const expected = value !== undefined ? `${tag}(${value})` : tag;
       return yield* Effect.fail(
-        ParseError({
+        new ParseError({
           message: `Expected ${expected}, got ${tokenDescription(t)}`,
           span: tokenSpan(t),
         }),
@@ -97,7 +97,7 @@ const expect = (s: ParseState, tag: string, value?: string): P<Token> =>
   });
 
 const fail = (message: string, s: ParseState): Effect.Effect<never, CompilerError> =>
-  Effect.flatMap(peek(s), (t) => Effect.fail(ParseError({ message, span: tokenSpan(t) })));
+  Effect.flatMap(peek(s), (t) => Effect.fail(new ParseError({ message, span: tokenSpan(t) })));
 
 // ---------------------------------------------------------------------------
 // Program

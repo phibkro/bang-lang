@@ -87,7 +87,7 @@ export const generate = (ast: TypedAst.TypedProgram): Effect.Effect<CodegenOutpu
     try: () => generateProgram(ast),
     catch: (e) => {
       if (typeof e === "object" && e !== null && "_tag" in e) return e as CompilerError;
-      return CodegenError({
+      return new CodegenError({
         message: `Codegen failed: ${String(e)}`,
         span: ast.span,
       });
