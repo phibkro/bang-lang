@@ -1,7 +1,9 @@
 export * as Ast from "./Ast.js";
+export * as Compiler from "./Compiler.js";
 export * as Checker from "./Checker.js";
 export * as Codegen from "./Codegen.js";
 export * as CompilerError from "./CompilerError.js";
+export * as ErrorFormatter from "./ErrorFormatter.js";
 export * as Lexer from "./Lexer.js";
 export * as Parser from "./Parser.js";
 export * as SourceMap from "./SourceMap.js";
