@@ -19,25 +19,31 @@ const makeState = (tokens: ReadonlyArray<Token>): ParseState => ({
   pos: 0,
 });
 
-const peek = (s: ParseState): Token => {
-  const t = s.tokens[s.pos];
-  if (t !== undefined) return t;
-  const last = s.tokens[s.tokens.length - 1];
-  if (last !== undefined) return last;
-  // eslint-disable-next-line functional/no-throw-statements -- defect: unreachable if tokenize produces EOF
-  throw new Error("Empty token array");
-};
+// ---------------------------------------------------------------------------
+// State primitives (all Effects)
+// ---------------------------------------------------------------------------
+
+const peek = (s: ParseState): Effect.Effect<Token, never> =>
+  Option.match(Option.fromNullable(s.tokens[s.pos]), {
+    onSome: Effect.succeed,
+    onNone: () =>
+      Option.match(Option.fromNullable(s.tokens[s.tokens.length - 1]), {
+        onSome: Effect.succeed,
+        onNone: () => Effect.die(new Error("Empty token array")),
+      }),
+  });
 
 const peekAt = (s: ParseState, ahead: number): Option.Option<Token> =>
   Option.fromNullable(s.tokens[s.pos + ahead]);
 
-const advance = (s: ParseState): readonly [Token, ParseState] =>
-  [peek(s), { ...s, pos: s.pos + 1 }] as const;
+const advance = (s: ParseState): Effect.Effect<readonly [Token, ParseState], never> =>
+  Effect.map(peek(s), (t) => [t, { ...s, pos: s.pos + 1 }] as const);
 
-const isAtEnd = (s: ParseState): boolean => peek(s)._tag === "EOF";
+const isAtEnd = (s: ParseState): Effect.Effect<boolean, never> =>
+  Effect.map(peek(s), (t) => t._tag === "EOF");
 
 // ---------------------------------------------------------------------------
-// Token accessors (type-safe — no `any`)
+// Token accessors
 // ---------------------------------------------------------------------------
 
 const tokenSpan = (t: Token): Span.Span => {
@@ -61,75 +67,86 @@ const tokenDescription = (t: Token): string =>
   "value" in t ? `${tokenTag(t)}(${String(t.value)})` : tokenTag(t);
 
 // ---------------------------------------------------------------------------
-// Parse primitives (return Effect to short-circuit on error)
+// Parse primitives
 // ---------------------------------------------------------------------------
 
 type P<A> = Effect.Effect<readonly [A, ParseState], CompilerError>;
 
-const check = (s: ParseState, tag: string, value?: string): boolean => {
-  const t = peek(s);
-  if (tokenTag(t) !== tag) return false;
-  if (value !== undefined && tokenValue(t) !== value) return false;
-  return true;
-};
+const check = (s: ParseState, tag: string, value?: string): Effect.Effect<boolean, never> =>
+  Effect.gen(function* () {
+    const t = yield* peek(s);
+    if (tokenTag(t) !== tag) return false;
+    if (value !== undefined && tokenValue(t) !== value) return false;
+    return true;
+  });
 
-const expect = (s: ParseState, tag: string, value?: string): P<Token> => {
-  if (!check(s, tag, value)) {
-    const t = peek(s);
-    const expected = value !== undefined ? `${tag}(${value})` : tag;
-    return Effect.fail(
-      ParseError({
-        message: `Expected ${expected}, got ${tokenDescription(t)}`,
-        span: tokenSpan(t),
-      }),
-    );
-  }
-  return Effect.succeed(advance(s));
-};
+const expect = (s: ParseState, tag: string, value?: string): P<Token> =>
+  Effect.gen(function* () {
+    const matches = yield* check(s, tag, value);
+    if (!matches) {
+      const t = yield* peek(s);
+      const expected = value !== undefined ? `${tag}(${value})` : tag;
+      return yield* Effect.fail(
+        ParseError({
+          message: `Expected ${expected}, got ${tokenDescription(t)}`,
+          span: tokenSpan(t),
+        }),
+      );
+    }
+    return yield* advance(s);
+  });
 
 const fail = (message: string, s: ParseState): Effect.Effect<never, CompilerError> =>
-  Effect.fail(ParseError({ message, span: tokenSpan(peek(s)) }));
+  Effect.flatMap(peek(s), (t) => Effect.fail(ParseError({ message, span: tokenSpan(t) })));
 
 // ---------------------------------------------------------------------------
 // Program
 // ---------------------------------------------------------------------------
 
-const parseProgram = (s: ParseState): P<Ast.Program> => {
-  const startSpan = tokenSpan(peek(s));
-  const go = (stmts: ReadonlyArray<Ast.Stmt>, st: ParseState): P<Ast.Program> => {
-    if (isAtEnd(st)) {
-      const endSpan = tokenSpan(peek(st));
-      return Effect.succeed([
-        Ast.Program({ statements: [...stmts], span: Span.merge(startSpan, endSpan) }),
-        st,
-      ] as const);
-    }
-    return Effect.flatMap(parseStatement(st), ([stmt, st2]) => go([...stmts, stmt], st2));
-  };
-  return go([], s);
-};
+const parseProgram = (s: ParseState): P<Ast.Program> =>
+  Effect.gen(function* () {
+    const startT = yield* peek(s);
+    const startSpan = tokenSpan(startT);
+
+    const go = (stmts: ReadonlyArray<Ast.Stmt>, st: ParseState): P<Ast.Program> =>
+      Effect.gen(function* () {
+        const atEnd = yield* isAtEnd(st);
+        if (atEnd) {
+          const endT = yield* peek(st);
+          return [
+            Ast.Program({ statements: [...stmts], span: Span.merge(startSpan, tokenSpan(endT)) }),
+            st,
+          ] as const;
+        }
+        const [stmt, st2] = yield* parseStatement(st);
+        return yield* go([...stmts, stmt], st2);
+      });
+
+    return yield* go([], s);
+  });
 
 // ---------------------------------------------------------------------------
 // Statement dispatch
 // ---------------------------------------------------------------------------
 
-const parseStatement = (s: ParseState): P<Ast.Stmt> => {
-  const t = peek(s);
+const parseStatement = (s: ParseState): P<Ast.Stmt> =>
+  Effect.gen(function* () {
+    const t = yield* peek(s);
 
-  if (tokenTag(t) === "Keyword" && tokenValue(t) === "declare") return parseDeclare(s);
-  if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return parseForceStatement(s);
-  if (tokenTag(t) === "Ident") {
-    return Option.match(peekAt(s, 1), {
-      onNone: () => parseExprStatement(s),
-      onSome: (next) =>
-        tokenTag(next) === "Operator" && tokenValue(next) === "="
-          ? parseDeclaration(s)
-          : parseExprStatement(s),
-    });
-  }
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "declare") return yield* parseDeclare(s);
+    if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return yield* parseForceStatement(s);
+    if (tokenTag(t) === "Ident") {
+      return yield* Option.match(peekAt(s, 1), {
+        onNone: () => parseExprStatement(s),
+        onSome: (next) =>
+          tokenTag(next) === "Operator" && tokenValue(next) === "="
+            ? parseDeclaration(s)
+            : parseExprStatement(s),
+      });
+    }
 
-  return fail(`Unexpected token at statement position: ${tokenDescription(t)}`, s);
-};
+    return yield* fail(`Unexpected token at statement position: ${tokenDescription(t)}`, s);
+  });
 
 // ---------------------------------------------------------------------------
 // Declare
@@ -152,15 +169,18 @@ const parseDeclare = (s: ParseState): P<Ast.Declare> =>
   });
 
 const parseDottedName = (s: ParseState): P<string> =>
-  Effect.flatMap(expect(s, "Ident"), ([tok, s1]) => {
-    const go = (name: string, st: ParseState): P<string> => {
-      if (isAtEnd(st) || !check(st, "Operator", ".")) return Effect.succeed([name, st] as const);
-      const [, st2] = advance(st); // consume .
-      return Effect.flatMap(expect(st2, "Ident"), ([part, st3]) =>
-        go(`${name}.${tokenValue(part)}`, st3),
-      );
-    };
-    return go(tokenValue(tok), s1);
+  Effect.gen(function* () {
+    const [tok, s1] = yield* expect(s, "Ident");
+    const go = (name: string, st: ParseState): P<string> =>
+      Effect.gen(function* () {
+        const atEnd = yield* isAtEnd(st);
+        const isDot = yield* check(st, "Operator", ".");
+        if (atEnd || !isDot) return [name, st] as const;
+        const [, st2] = yield* advance(st);
+        const [part, st3] = yield* expect(st2, "Ident");
+        return yield* go(`${name}.${tokenValue(part)}`, st3);
+      });
+    return yield* go(tokenValue(tok), s1);
   });
 
 // ---------------------------------------------------------------------------
@@ -214,40 +234,50 @@ const parseExprStatement = (s: ParseState): P<Ast.ExprStatement> =>
 // ---------------------------------------------------------------------------
 
 const parseExpr = (s: ParseState): P<Ast.Expr> =>
-  Effect.flatMap(parsePrimary(s), ([primary, s1]) =>
-    Effect.flatMap(parseDotAccess(primary, s1), ([dotExpr, s2]) => parseApplication(dotExpr, s2)),
-  );
+  Effect.gen(function* () {
+    const [primary, s1] = yield* parsePrimary(s);
+    const [dotExpr, s2] = yield* parseDotAccess(primary, s1);
+    return yield* parseApplication(dotExpr, s2);
+  });
 
-const parseDotAccess = (expr: Ast.Expr, s: ParseState): P<Ast.Expr> => {
-  if (isAtEnd(s) || !check(s, "Operator", ".")) return Effect.succeed([expr, s] as const);
-  const [, s1] = advance(s); // consume .
-  return Effect.flatMap(expect(s1, "Ident"), ([fieldTok, s2]) => {
+const parseDotAccess = (expr: Ast.Expr, s: ParseState): P<Ast.Expr> =>
+  Effect.gen(function* () {
+    const atEnd = yield* isAtEnd(s);
+    const isDot = yield* check(s, "Operator", ".");
+    if (atEnd || !isDot) return [expr, s] as const;
+    const [, s1] = yield* advance(s);
+    const [fieldTok, s2] = yield* expect(s1, "Ident");
     const dotExpr = Ast.DotAccess({
       object: expr,
       field: tokenValue(fieldTok),
       span: Span.merge(expr.span, tokenSpan(fieldTok)),
     });
-    return parseDotAccess(dotExpr, s2); // recurse for chained dots
+    return yield* parseDotAccess(dotExpr, s2);
   });
-};
 
-const parseApplication = (func: Ast.Expr, s: ParseState): P<Ast.Expr> => {
-  if (isAtEnd(s) || !isArgStart(peek(s))) return Effect.succeed([func, s] as const);
-  const collectArgs = (
-    args: ReadonlyArray<Ast.Expr>,
-    st: ParseState,
-  ): P<ReadonlyArray<Ast.Expr>> => {
-    if (isAtEnd(st) || !isArgStart(peek(st))) return Effect.succeed([args, st] as const);
-    return Effect.flatMap(parsePrimary(st), ([arg, st2]) => collectArgs([...args, arg], st2));
-  };
-  return Effect.map(collectArgs([], s), ([args, s2]) => {
-    const lastArg = args[args.length - 1] ?? func; // fallback to func span if no args (unreachable)
-    return [
-      Ast.App({ func, args: [...args], span: Span.merge(func.span, lastArg.span) }),
-      s2,
-    ] as const;
+const parseApplication = (func: Ast.Expr, s: ParseState): P<Ast.Expr> =>
+  Effect.gen(function* () {
+    const atEnd = yield* isAtEnd(s);
+    const t = yield* peek(s);
+    if (atEnd || !isArgStart(t)) return [func, s] as const;
+
+    const collectArgs = (
+      args: ReadonlyArray<Ast.Expr>,
+      st: ParseState,
+    ): P<ReadonlyArray<Ast.Expr>> =>
+      Effect.gen(function* () {
+        const end = yield* isAtEnd(st);
+        const curr = yield* peek(st);
+        if (end || !isArgStart(curr)) return [args, st] as const;
+        const [arg, st2] = yield* parsePrimary(st);
+        return yield* collectArgs([...args, arg], st2);
+      });
+
+    const [args, s2] = yield* collectArgs([], s);
+    const lastArg = args[args.length - 1];
+    const endSpan = lastArg !== undefined ? lastArg.span : func.span;
+    return [Ast.App({ func, args: [...args], span: Span.merge(func.span, endSpan) }), s2] as const;
   });
-};
 
 const isArgStart = (t: Token): boolean => {
   const tag = tokenTag(t);
@@ -262,109 +292,98 @@ const isArgStart = (t: Token): boolean => {
   );
 };
 
-const parsePrimary = (s: ParseState): P<Ast.Expr> => {
-  const t = peek(s);
-  const tag = tokenTag(t);
+const parsePrimary = (s: ParseState): P<Ast.Expr> =>
+  Effect.gen(function* () {
+    const t = yield* peek(s);
+    const tag = tokenTag(t);
 
-  if (tag === "Ident") {
-    const [tok, s1] = advance(s);
-    return Effect.succeed([
-      Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }),
-      s1,
-    ] as const);
-  }
-  if (tag === "TypeIdent") {
-    const [tok, s1] = advance(s);
-    return Effect.succeed([
-      Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }),
-      s1,
-    ] as const);
-  }
-  if (tag === "StringLit") {
-    const [tok, s1] = advance(s);
-    return Effect.succeed([
-      Ast.StringLiteral({ value: tokenValue(tok), span: tokenSpan(tok) }),
-      s1,
-    ] as const);
-  }
-  if (tag === "IntLit") {
-    const [tok, s1] = advance(s);
-    return Effect.succeed([
-      Ast.IntLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) }),
-      s1,
-    ] as const);
-  }
-  if (tag === "BoolLit") {
-    const [tok, s1] = advance(s);
-    return Effect.succeed([
-      Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) }),
-      s1,
-    ] as const);
-  }
-  if (tag === "Unit") {
-    const [tok, s1] = advance(s);
-    return Effect.succeed([Ast.UnitLiteral({ span: tokenSpan(tok) }), s1] as const);
-  }
+    if (tag === "Ident") {
+      const [tok, s1] = yield* advance(s);
+      return [Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "TypeIdent") {
+      const [tok, s1] = yield* advance(s);
+      return [Ast.Ident({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "StringLit") {
+      const [tok, s1] = yield* advance(s);
+      return [Ast.StringLiteral({ value: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "IntLit") {
+      const [tok, s1] = yield* advance(s);
+      return [
+        Ast.IntLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) }),
+        s1,
+      ] as const;
+    }
+    if (tag === "BoolLit") {
+      const [tok, s1] = yield* advance(s);
+      return [Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "Unit") {
+      const [tok, s1] = yield* advance(s);
+      return [Ast.UnitLiteral({ span: tokenSpan(tok) }), s1] as const;
+    }
 
-  return fail(`Expected expression, got ${tokenDescription(t)}`, s);
-};
+    return yield* fail(`Expected expression, got ${tokenDescription(t)}`, s);
+  });
 
 // ---------------------------------------------------------------------------
 // Type parsing
 // ---------------------------------------------------------------------------
 
 const parseType = (s: ParseState): P<Ast.Type> =>
-  Effect.flatMap(parsePrimaryType(s), ([left, s1]) => {
-    if (!isAtEnd(s1) && check(s1, "Operator", "->")) {
-      const [, s2] = advance(s1); // consume ->
-      return Effect.map(
-        parseType(s2),
-        ([result, s3]) =>
-          [
-            Ast.ArrowType({ param: left, result, span: Span.merge(left.span, result.span) }),
-            s3,
-          ] as const,
-      );
+  Effect.gen(function* () {
+    const [left, s1] = yield* parsePrimaryType(s);
+    const atEnd = yield* isAtEnd(s1);
+    const isArrow = yield* check(s1, "Operator", "->");
+    if (!atEnd && isArrow) {
+      const [, s2] = yield* advance(s1);
+      const [result, s3] = yield* parseType(s2);
+      return [
+        Ast.ArrowType({ param: left, result, span: Span.merge(left.span, result.span) }),
+        s3,
+      ] as const;
     }
-    return Effect.succeed([left, s1] as const);
+    return [left, s1] as const;
   });
 
-const parsePrimaryType = (s: ParseState): P<Ast.Type> => {
-  const t = peek(s);
+const parsePrimaryType = (s: ParseState): P<Ast.Type> =>
+  Effect.gen(function* () {
+    const t = yield* peek(s);
 
-  if (tokenTag(t) === "TypeIdent" && tokenValue(t) === "Effect") return parseEffectType(s);
+    if (tokenTag(t) === "TypeIdent" && tokenValue(t) === "Effect") return yield* parseEffectType(s);
 
-  if (tokenTag(t) === "TypeIdent") {
-    const [tok, s1] = advance(s);
-    return Effect.succeed([
-      Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }),
-      s1,
-    ] as const);
-  }
+    if (tokenTag(t) === "TypeIdent") {
+      const [tok, s1] = yield* advance(s);
+      return [Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
 
-  // {} in type position → ConcreteType("Unit")
-  if (tokenTag(t) === "Delimiter" && tokenValue(t) === "{") {
-    return Option.match(peekAt(s, 1), {
-      onNone: () => fail(`Expected type, got ${tokenDescription(t)}`, s),
-      onSome: (next) => {
-        if (tokenTag(next) === "Delimiter" && tokenValue(next) === "}") {
-          const [startTok, s1] = advance(s);
-          const [endTok, s2] = advance(s1);
-          return Effect.succeed([
-            Ast.ConcreteType({
-              name: "Unit",
-              span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
-            }),
-            s2,
-          ] as const);
-        }
-        return fail(`Expected type, got ${tokenDescription(t)}`, s);
-      },
-    });
-  }
+    // {} in type position → ConcreteType("Unit")
+    if (tokenTag(t) === "Delimiter" && tokenValue(t) === "{") {
+      return yield* Option.match(peekAt(s, 1), {
+        onNone: () => fail(`Expected type, got ${tokenDescription(t)}`, s),
+        onSome: (next) => {
+          if (tokenTag(next) === "Delimiter" && tokenValue(next) === "}") {
+            return Effect.gen(function* () {
+              const [startTok, s1] = yield* advance(s);
+              const [endTok, s2] = yield* advance(s1);
+              return [
+                Ast.ConcreteType({
+                  name: "Unit",
+                  span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
+                }),
+                s2,
+              ] as const;
+            });
+          }
+          return fail(`Expected type, got ${tokenDescription(t)}`, s);
+        },
+      });
+    }
 
-  return fail(`Expected type, got ${tokenDescription(t)}`, s);
-};
+    return yield* fail(`Expected type, got ${tokenDescription(t)}`, s);
+  });
 
 const parseEffectType = (s: ParseState): P<Ast.EffectType> =>
   Effect.gen(function* () {
@@ -381,10 +400,14 @@ const parseEffectType = (s: ParseState): P<Ast.EffectType> =>
   });
 
 const parseDeps = (s: ParseState): P<ReadonlyArray<string>> => {
-  const go = (deps: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> => {
-    if (isAtEnd(st) || check(st, "Delimiter", "}")) return Effect.succeed([deps, st] as const);
-    return Effect.flatMap(expect(st, "Ident"), ([tok, st2]) => go([...deps, tokenValue(tok)], st2));
-  };
+  const go = (deps: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> =>
+    Effect.gen(function* () {
+      const atEnd = yield* isAtEnd(st);
+      const isClose = yield* check(st, "Delimiter", "}");
+      if (atEnd || isClose) return [deps, st] as const;
+      const [tok, st2] = yield* expect(st, "Ident");
+      return yield* go([...deps, tokenValue(tok)], st2);
+    });
   return go([], s);
 };
 
