@@ -41,6 +41,8 @@ Statement       = Declaration
                 | Import
                 | Export
                 | Defer
+                | EffectDecl
+                | HandleExpr
                 ;
 
 
@@ -273,6 +275,175 @@ Defer           = 'defer' Force ;
     Deferred effects are guaranteed to run even if
     the block fails. Order of execution is LIFO --
     last deferred runs first.
+*)
+
+
+(* ─────────────────────────────────────────
+   ALGEBRAIC EFFECTS
+   ───────────────────────────────────────── *)
+
+EffectDecl      = 'effect' TypeIdent TypeVar* '{' Operation+ '}' ;
+
+Operation       = Ident ':' Type ;
+
+HandleExpr      = 'handle' Expr '{' Handler+ '}' ;
+
+Handler         = TypeIdent '->' Block ;
+
+(*
+    ALGEBRAIC EFFECTS — THE CORE ABSTRACTION
+    ─────────────────────────────────────────
+    Errors, dependencies, and side effects are all the same
+    kind of thing: algebraic effects. An effect declares
+    operations. A handler provides implementations.
+
+    The difference between "error" and "dependency" is what
+    the handler does:
+    - Handler resumes with a value  → dependency / service
+    - Handler aborts                → error
+    - Handler transforms and resumes → middleware / interceptor
+
+    DECLARING EFFECTS
+    ─────────────────
+    effect Console {
+      log   : String -> Unit
+      error : String -> Unit
+    }
+
+    effect Database {
+      query  : String -> List Row
+      insert : Row -> Unit
+    }
+
+    effect Fail E {
+      fail : E -> Nothing
+    }
+
+    Effects can be parameterised (Fail E). The Nothing return
+    type signals an operation that never resumes — i.e., an error.
+
+    USING EFFECTS
+    ─────────────
+    Using an operation adds the effect to the type signature
+    automatically. No annotation needed:
+
+    getUser : Int -> Effect User { Database, Fail NotFoundError }
+    getUser = (id) -> {
+      rows = !Database.query id
+      match rows {
+        Cons user _ -> user
+        Nil         -> !Fail.fail (NotFound id)
+      }
+    }
+
+    The compiler infers { Database, Fail NotFoundError } from
+    the operations used in the body.
+
+    HANDLING EFFECTS
+    ────────────────
+    Handlers eliminate effects from the type signature:
+
+    !handle (getUser 42) {
+      Database -> {
+        query  = (sql) -> { !pg.query sql },
+        insert = (row) -> { !pg.insert row }
+      }
+      Fail -> {
+        fail = (e) -> { None }
+      }
+    }
+
+    After handling, the handled effects are removed from the
+    requirement set. Unhandled effects propagate to the caller.
+
+    EFFECT COMPOSITION
+    ──────────────────
+    Effects compose naturally. Calling a function that uses
+    Database adds Database to your effect set:
+
+    getUserAndLog : Int -> Effect User { Database, Console, Fail NotFoundError }
+    getUserAndLog = (id) -> {
+      user = !getUser id              -- adds { Database, Fail NotFoundError }
+      !Console.log user.name          -- adds { Console }
+      user
+    }
+
+    EFFECT KIND
+    ───────────
+    In Bang's kind system:
+
+    Type                 -- values:  Int, String, User
+    Effect               -- effects: Console, Database, Fail E
+    Row Effect           -- effect sets: { Console, Database }
+    Type -> Type         -- type constructors: List, Maybe
+
+    Effect sets are row types. Handlers consume from the row.
+    Row variables enable polymorphism over effects:
+
+    map : (a -> b) -> List a -> List b              -- pure
+    mapE : (a -> Effect b e) -> List a              -- effectful
+         -> Effect (List b) e
+
+    COMPILATION TO EFFECT TS
+    ────────────────────────
+    The compiler determines how to lower each effect:
+
+    effect with operations returning values
+      → Effect service (Context.Tag + Layer)
+      → Goes into R parameter of Effect<A, E, R>
+
+    effect with operations returning Nothing
+      → Tagged error type
+      → Goes into E parameter of Effect<A, E, R>
+
+    handle expr { ... }
+      → Effect.provide(Layer.succeed(...))    for services
+      → Effect.catchTag(...)                  for errors
+
+    Example:
+    effect Database {                   class Database extends
+      query : String -> List Row          Context.Tag("Database")<Database, {
+    }                                       readonly query: (sql: string)
+                                              => Effect<List<Row>>
+                                          }>() {}
+
+    effect Fail E {                     class NotFoundError extends
+      fail : E -> Nothing                 Data.TaggedError("NotFoundError")<{
+    }                                       ...
+                                          }>() {}
+
+    PRELUDE EFFECTS
+    ───────────────
+    These are defined in @bang/std, not compiler primitives:
+
+    effect Console {
+      log   : String -> Unit
+      error : String -> Unit
+      warn  : String -> Unit
+    }
+
+    effect FileSystem {
+      read   : String -> String
+      write  : String -> String -> Unit
+      delete : String -> Unit
+    }
+
+    effect Http {
+      fetch : String -> Response
+    }
+
+    effect Fail E {
+      fail : E -> Nothing
+    }
+
+    effect Random {
+      next     : Unit -> Float
+      nextInt  : Int -> Int
+    }
+
+    effect Clock {
+      now : Unit -> DateTime
+    }
 *)
 
 
@@ -550,36 +721,46 @@ Constraint      = TypeVar ':' TypeIdent ;
     BUILT-IN TYPE CONSTRUCTORS
     ──────────────────────────
 
-    These are the compiler-primitive types. They cannot
-    be defined in user code because the compiler has
-    special knowledge of them:
+    EFFECT TYPE (unified)
+    ─────────────────────
+    The core computation type uses an effect row, not
+    separate error and dependency parameters:
 
-    Signal A D E
-        Pure reactive computation.
+    Effect A E
         A   value type
-        D   dependency set  { ident* }
-        E   error type
-        Compiler infers -- annotation optional.
+        E   effect row  { Effect1, Effect2, ... }
 
-    Effect A D E
-        Effectful computation.
-        A   value type
-        D   resource dependency set  { ident* }
-        E   error type
-        Compiler infers -- annotation optional.
+    The effect row contains ALL algebraic effects —
+    both "dependencies" and "errors" are effects:
 
-    Signal and Effect are semantically distinct
-    but compile to the same Effect.Effect<A,E,D>.
+    getUser : Int -> Effect User { Database, Fail NotFoundError }
+
+    The compiler determines how to lower each effect
+    to Effect TS (service vs error) based on the effect
+    declaration. See ALGEBRAIC EFFECTS section.
+
+    Signal A E
+        Pure reactive computation with the same structure.
+        Compiler infers Signal when body contains no !.
+        Signal and Effect compile to the same Effect.Effect<A,E,R>
+        but Signal documents purity intent.
 
     Ref A           mutable reference  (plain context)
     TRef A          mutable reference  (transaction context)
     Unit            absence of value  ()
 
+    EFFECT ROW SYNTAX
+    ─────────────────
+    {}                              no effects (pure)
+    { Console }                     single effect
+    { Database, Console }           multiple effects
+    { Database, Console | e }       open row (polymorphic, allows more effects)
+
+    Open rows enable effect polymorphism:
+    map : (a -> Effect b e) -> List a -> Effect (List b) e
+
     PRELUDE TYPES (defined as ADTs in @bang/std)
     ─────────────
-    These are regular Bang types, not compiler primitives.
-    They ship in the prelude and are auto-imported:
-
     type Maybe A
       | Some A
       | None
@@ -592,15 +773,7 @@ Constraint      = TypeVar ':' TypeIdent ;
       | Cons A (List A)
       | Nil
 
-    Because they are Schema-backed ADTs, they get
-    decode/encode/equality/arbitrary for free.
-
-    DEPENDENCY SETS
-    ───────────────
-    {}              no dependencies
-    { db }          single dependency
-    { db, net }     multiple dependencies
-    { db | r }      open row, r is a type variable  (v2)
+    Schema-backed: decode/encode/equality/arbitrary for free.
 
     RESOURCE TYPES
     ──────────────
@@ -608,10 +781,10 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     Resource A = {
         value   : A,
-        cleanup : Effect Unit {} {}
+        cleanup : Effect Unit {}
     }
 
-    withX : (Resource X -> Effect A { x } E) -> Effect A {} E
+    withX : (Resource X -> Effect A { x }) -> Effect A {}
 
     The handler must consume the resource within its scope.
     The resource never escapes. Cleanup is guaranteed.
@@ -624,6 +797,7 @@ Constraint      = TypeVar ':' TypeIdent ;
     Top-level function declarations benefit from explicit
     annotation for documentation and cross-module checking.
     Inference is full Hindley-Milner within blocks.
+    Effect rows are inferred from operations used in the body.
 
     MUST-HANDLE
     ───────────
@@ -649,8 +823,8 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     Foreign functions are declared with 'declare':
 
-    declare console.log : String -> Effect Unit { stdout } {}
-    declare fetch : String -> Effect Response { net } HttpError
+    declare console.log : String -> Effect Unit { Console }
+    declare fetch : String -> Effect Response { Http, Fail HttpError }
 
     Then called like any BANG function:
 
@@ -696,10 +870,13 @@ Constraint      = TypeVar ':' TypeIdent ;
     and             or              xor
     where           forall          defer
     true            false           if
-    transaction     scoped
+    transaction     scoped          effect
+    handle
 
     Note: race, fork, all are standard library functions,
     not keywords. They are regular identifiers.
+    Console, Database, etc. are effect names (TypeIdent),
+    not keywords.
 *)
 
 
