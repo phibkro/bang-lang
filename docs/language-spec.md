@@ -659,21 +659,26 @@ Arm             = Pattern '->' Expr ;
    LAMBDA
    ───────────────────────────────────────── *)
 
-Lambda          = Param '->' Block
-                | '(' Param* ')' '->' Block
+Lambda          = '(' Param (',' Param)* ')' '->' Block
+                | Param '->' Block
                 ;
 
 Param           = Ident
-                | '(' Ident ':' Type ')'
+                | Ident ':' Type
                 ;
 
 (*
-    Formatter canonicalises all lambdas to
-    parenthesised multi-param form:
+    Params are comma-separated in one group:
+    (a, b) -> { a + b }
+
+    Formatter canonicalises single-param to parenthesised:
     x -> { expr }  becomes  (x) -> { expr }
 
+    Typed params:
+    (name: String, age: Int) -> { ... }
+
     Compiles to:
-    (x) => Effect.gen(function* () { ... })
+    (a, b) => Effect.gen(function* () { ... })
 *)
 
 
@@ -1139,7 +1144,7 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     match e { p -> h }                  yield* Effect.matchEffect(e, { ... })
 
-    (p) -> { }                          (p) => Effect.gen(function* () { })
+    (a, b) -> { }                       (a, b) => Effect.gen(function* () { })
 
     !transaction { }                    yield* STM.commit(
                                             STM.gen(function* () { }))
