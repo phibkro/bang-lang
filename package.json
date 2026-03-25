@@ -1,0 +1,15 @@
+{
+  "name": "bang-lang",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "test": "vitest",
+    "check": "tsc -b packages/core/tsconfig.json packages/cli/tsconfig.json"
+  },
+  "devDependencies": {
+    "vitest": "^3"
+  }
+}

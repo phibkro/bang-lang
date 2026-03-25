@@ -1,0 +1,24 @@
+{
+  "name": "@bang/cli",
+  "version": "0.0.1",
+  "bin": {
+    "bang": "./src/index.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "vitest",
+    "check": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "@bang/core": "workspace:*",
+    "@effect/cli": "^0.75.0",
+    "@effect/platform": "^0.96.0",
+    "@effect/platform-node": "^0.106.0",
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^0.29.0",
+    "typescript": "^5.8",
+    "vitest": "^3"
+  }
+}

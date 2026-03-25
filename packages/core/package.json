@@ -1,0 +1,21 @@
+{
+  "name": "@bang/core",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "test": "vitest",
+    "check": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^0.29.0",
+    "typescript": "^5.8",
+    "vitest": "^3"
+  }
+}
