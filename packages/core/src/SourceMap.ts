@@ -13,17 +13,15 @@ export interface SourceMap {
   readonly size: number;
 }
 
-export const empty = (): SourceMap => ({
-  entries: HashMap.empty(),
-  get size() {
-    return HashMap.size(this.entries);
-  },
+const makeSourceMap = (entries: HashMap.HashMap<string, Span>): SourceMap => ({
+  entries,
+  size: HashMap.size(entries),
 });
 
-export const add = (map: SourceMap, tsPos: TSPosition, bangSpan: Span): SourceMap => ({
-  ...map,
-  entries: HashMap.set(map.entries, posKey(tsPos), bangSpan),
-});
+export const empty = (): SourceMap => makeSourceMap(HashMap.empty());
+
+export const add = (map: SourceMap, tsPos: TSPosition, bangSpan: Span): SourceMap =>
+  makeSourceMap(HashMap.set(map.entries, posKey(tsPos), bangSpan));
 
 export const lookup = (map: SourceMap, tsPos: TSPosition): Option.Option<Span> =>
   HashMap.get(map.entries, posKey(tsPos));
