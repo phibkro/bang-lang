@@ -32,4 +32,15 @@ greeting = "hello, bang"
       expect(ast._tag).toBe("Program");
     }),
   );
+
+  it.effect("snapshot: hello.bang", () =>
+    Effect.gen(function* () {
+      const source = `declare console.log : String -> Effect Unit { stdout } {}
+
+greeting = "hello, bang"
+!console.log greeting`;
+      const result = yield* Compiler.compile(source);
+      expect(result.code).toMatchSnapshot();
+    }),
+  );
 });
