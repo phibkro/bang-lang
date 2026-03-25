@@ -659,26 +659,38 @@ Arm             = Pattern '->' Expr ;
    LAMBDA
    ───────────────────────────────────────── *)
 
-Lambda          = '(' Param (',' Param)* ')' '->' Block
-                | Param '->' Block
-                ;
+Lambda          = Param+ '->' Block ;
 
 Param           = Ident
-                | Ident ':' Type
+                | '(' Ident ':' Type ')'
                 ;
 
 (*
-    Params are comma-separated in one group:
-    (a, b) -> { a + b }
+    Haskell-style bare params, auto-curried:
+    x -> { x * 2 }                 single param
+    a b -> { a + b }               multi param (curried)
+    (x : Int) -> { x * 2 }        typed param
 
-    Formatter canonicalises single-param to parenthesised:
-    x -> { expr }  becomes  (x) -> { expr }
+    All multi-param lambdas are curried:
+    a b -> { a + b }  =  a -> { b -> { a + b } }
 
-    Typed params:
-    (name: String, age: Int) -> { ... }
+    Partial application works naturally:
+    addThree = add 3               returns b -> { 3 + b }
 
-    Compiles to:
-    (a, b) => Effect.gen(function* () { ... })
+    Compiles to (curried):
+    a b -> { a + b }  →  (a) => (b) => Effect.gen(function* () { return a + b })
+
+    PIPELINE INTERCEPTION
+    ─────────────────────
+    .tap inherits from Effect — run a side effect,
+    pass the value through unchanged:
+
+    !fetch "/api/data"
+      .tap (v) -> { !Console.log "got: ${v}" }
+      .map (v) -> { v ++ " processed" }
+
+    Effect handlers are the middleware pattern for
+    wrapping all operations of a service. See EFFECT INTERFACES.
 *)
 
 
@@ -1144,7 +1156,8 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     match e { p -> h }                  yield* Effect.matchEffect(e, { ... })
 
-    (a, b) -> { }                       (a, b) => Effect.gen(function* () { })
+    x -> { }                            (x) => Effect.gen(function* () { })
+    a b -> { }                          (a) => (b) => Effect.gen(function* () { })
 
     !transaction { }                    yield* STM.commit(
                                             STM.gen(function* () { }))
