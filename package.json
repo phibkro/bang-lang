@@ -7,9 +7,17 @@
   "type": "module",
   "scripts": {
     "test": "vitest",
-    "check": "tsc -b packages/core/tsconfig.json packages/cli/tsconfig.json"
+    "check": "tsc -b packages/core/tsconfig.json packages/cli/tsconfig.json",
+    "lint": "eslint packages/*/src/",
+    "lint:fix": "eslint packages/*/src/ --fix"
   },
   "devDependencies": {
+    "@effect/eslint-plugin": "^0.3.2",
+    "@effect/language-service": "^0.83.1",
+    "eslint": "^10.1.0",
+    "eslint-plugin-functional": "^9.0.4",
+    "typescript-eslint": "^8.57.2",
     "vitest": "^3"
-  }
+  },
+  "packageManager": "pnpm@10.33.0"
 }
