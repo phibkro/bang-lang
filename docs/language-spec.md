@@ -42,7 +42,6 @@ Statement       = Declaration
                 | Export
                 | Defer
                 | EffectDecl
-                | HandleExpr
                 ;
 
 
@@ -279,7 +278,7 @@ Defer           = 'defer' Force ;
 
 
 (* ─────────────────────────────────────────
-   ALGEBRAIC EFFECTS
+   EFFECT INTERFACES
    ───────────────────────────────────────── *)
 
 EffectDecl      = 'effect' TypeIdent TypeVar* '{' Operation+ '}' ;
@@ -288,20 +287,14 @@ Operation       = Ident ':' Type ;
 
 HandleExpr      = 'handle' Expr '{' Handler+ '}' ;
 
-Handler         = TypeIdent '->' Block ;
+Handler         = TypeIdent '->' Expr ;
 
 (*
-    ALGEBRAIC EFFECTS — THE CORE ABSTRACTION
-    ─────────────────────────────────────────
-    Errors, dependencies, and side effects are all the same
-    kind of thing: algebraic effects. An effect declares
-    operations. A handler provides implementations.
-
-    The difference between "error" and "dependency" is what
-    the handler does:
-    - Handler resumes with a value  → dependency / service
-    - Handler aborts                → error
-    - Handler transforms and resumes → middleware / interceptor
+    EFFECT INTERFACES
+    ─────────────────
+    An effect declares a set of operations. A handler provides
+    implementations. All handling is explicit — no implicit
+    resolution, no default implementations.
 
     DECLARING EFFECTS
     ─────────────────
@@ -315,135 +308,177 @@ Handler         = TypeIdent '->' Block ;
       insert : Row -> Unit
     }
 
-    effect Fail E {
-      fail : E -> Nothing
+    Effects can be parameterised:
+    effect Cache K V {
+      get : K -> Maybe V
+      set : K -> V -> Unit
     }
 
-    Effects can be parameterised (Fail E). The Nothing return
-    type signals an operation that never resumes — i.e., an error.
+    PROVIDING IMPLEMENTATIONS
+    ─────────────────────────
+    Implementations are values. Create them, export them,
+    pass them around:
+
+    consoleNode : Console = {
+      log   = (msg) -> { !js.console.log msg },
+      error = (msg) -> { !js.console.error msg }
+    }
+
+    pgDatabase : Database = {
+      query  = (sql) -> { !pg.rawQuery sql },
+      insert = (row) -> { !pg.insertRow row }
+    }
+
+    mockDatabase : Database = {
+      query  = (sql) -> { [] },
+      insert = (row) -> { () }
+    }
+
+    Implementations are first-class values. Export them
+    alongside the effect declaration:
+    export Console, consoleNode
+    export Database, pgDatabase
 
     USING EFFECTS
     ─────────────
-    Using an operation adds the effect to the type signature
-    automatically. No annotation needed:
+    Using an operation adds the effect to the R parameter:
 
-    getUser : Int -> Effect User { Database, Fail NotFoundError }
+    getUser : Int -> Effect User NotFoundError { Database }
     getUser = (id) -> {
       rows = !Database.query id
       match rows {
         Cons user _ -> user
-        Nil         -> !Fail.fail (NotFound id)
+        Nil         -> !fail (NotFound id)
       }
     }
 
-    The compiler infers { Database, Fail NotFoundError } from
-    the operations used in the body.
+    The compiler infers { Database } from the operations
+    used in the body.
 
     HANDLING EFFECTS
     ────────────────
-    Handlers eliminate effects from the type signature:
+    handle provides implementations and eliminates
+    effects from the R parameter:
 
     !handle (getUser 42) {
+      Database -> pgDatabase
+    }
+
+    Handlers are always explicit. You see exactly which
+    implementation is used by reading the code.
+
+    Multiple effects:
+    !handle myApp {
+      Database -> pgDatabase,
+      Console  -> consoleNode
+    }
+
+    Inline handlers for one-offs:
+    !handle myApp {
       Database -> {
         query  = (sql) -> { !pg.query sql },
         insert = (row) -> { !pg.insert row }
       }
-      Fail -> {
-        fail = (e) -> { None }
-      }
     }
-
-    After handling, the handled effects are removed from the
-    requirement set. Unhandled effects propagate to the caller.
 
     EFFECT COMPOSITION
     ──────────────────
-    Effects compose naturally. Calling a function that uses
-    Database adds Database to your effect set:
+    Effects compose through the call graph. Calling a
+    function that uses Database adds Database to your R:
 
-    getUserAndLog : Int -> Effect User { Database, Console, Fail NotFoundError }
+    getUserAndLog : Int -> Effect User NotFoundError { Database, Console }
     getUserAndLog = (id) -> {
-      user = !getUser id              -- adds { Database, Fail NotFoundError }
-      !Console.log user.name          -- adds { Console }
+      user = !getUser id          -- adds { Database }
+      !Console.log user.name      -- adds { Console }
       user
     }
 
-    EFFECT KIND
-    ───────────
-    In Bang's kind system:
+    ERRORS vs EFFECTS
+    ─────────────────
+    Errors (E) and effects (R) are separate channels:
 
-    Type                 -- values:  Int, String, User
-    Effect               -- effects: Console, Database, Fail E
-    Row Effect           -- effect sets: { Console, Database }
-    Type -> Type         -- type constructors: List, Maybe
+    Effect A E R
+      A   value type
+      E   error type (ADT, propagates automatically)
+      R   effect set (interfaces, must be handled explicitly)
 
-    Effect sets are row types. Handlers consume from the row.
-    Row variables enable polymorphism over effects:
+    Errors propagate up. You catch them:
+    catch (getUser 42) {
+      NotFound msg -> None
+    }
 
-    map : (a -> b) -> List a -> List b              -- pure
-    mapE : (a -> Effect b e) -> List a              -- effectful
-         -> Effect (List b) e
+    Effects must be provided. You handle them:
+    !handle (getUser 42) {
+      Database -> pgDatabase
+    }
+
+    This separation is deliberate:
+    - Errors are exceptional. Forgetting to catch is a warning.
+    - Effects are structural. Forgetting to handle is a compile error.
+
+    TESTING
+    ───────
+    Swap implementations by passing different handlers:
+
+    testGetUser = {
+      result = !handle (getUser 42) {
+        Database -> mockDatabase
+      }
+      !assert (result.name == "test user")
+    }
+
+    No special testing infrastructure needed.
+    Mock is just another implementation value.
 
     COMPILATION TO EFFECT TS
     ────────────────────────
-    The compiler determines how to lower each effect:
-
-    effect with operations returning values
-      → Effect service (Context.Tag + Layer)
-      → Goes into R parameter of Effect<A, E, R>
-
-    effect with operations returning Nothing
-      → Tagged error type
-      → Goes into E parameter of Effect<A, E, R>
-
-    handle expr { ... }
-      → Effect.provide(Layer.succeed(...))    for services
-      → Effect.catchTag(...)                  for errors
-
-    Example:
     effect Database {                   class Database extends
       query : String -> List Row          Context.Tag("Database")<Database, {
     }                                       readonly query: (sql: string)
                                               => Effect<List<Row>>
                                           }>() {}
 
-    effect Fail E {                     class NotFoundError extends
-      fail : E -> Nothing                 Data.TaggedError("NotFoundError")<{
-    }                                       ...
-                                          }>() {}
+    pgDatabase : Database = { ... }     const pgDatabase = {
+                                          query: (sql) => ...
+                                        }
+
+    !handle expr {                      pipe(expr,
+      Database -> pgDatabase              Effect.provide(
+    }                                       Layer.succeed(Database, pgDatabase)
+                                          ))
 
     PRELUDE EFFECTS
     ───────────────
-    These are defined in @bang/std, not compiler primitives:
+    These are defined in @bang/std with standard implementations:
 
-    effect Console {
+    effect Console {                consoleNode   : Console
       log   : String -> Unit
       error : String -> Unit
       warn  : String -> Unit
     }
 
-    effect FileSystem {
+    effect FileSystem {             fsNode        : FileSystem
       read   : String -> String
       write  : String -> String -> Unit
       delete : String -> Unit
     }
 
-    effect Http {
+    effect Http {                   httpNode      : Http
       fetch : String -> Response
     }
 
-    effect Fail E {
-      fail : E -> Nothing
-    }
-
-    effect Random {
+    effect Random {                 randomDefault : Random
       next     : Unit -> Float
       nextInt  : Int -> Int
     }
 
-    effect Clock {
+    effect Clock {                  clockDefault  : Clock
       now : Unit -> DateTime
     }
+
+    Import the effect and its implementation:
+    from STD.IO.CONSOLE import Console, consoleNode
+    from STD.HTTP import Http, httpNode
 *)
 
 
@@ -494,6 +529,7 @@ Expr            = Expr '.' Ident Atom*              (* composition / field acces
                 | Match                             (* pattern match *)
                 | Lambda                            (* anonymous function *)
                 | Transaction                       (* atomic block *)
+                | HandleExpr                        (* effect handling *)
                 | '(' Expr ')'                      (* grouping *)
                 ;
 
@@ -721,25 +757,19 @@ Constraint      = TypeVar ':' TypeIdent ;
     BUILT-IN TYPE CONSTRUCTORS
     ──────────────────────────
 
-    EFFECT TYPE (unified)
-    ─────────────────────
-    The core computation type uses an effect row, not
-    separate error and dependency parameters:
-
-    Effect A E
+    EFFECT TYPE
+    ───────────
+    Effect A E R
         A   value type
-        E   effect row  { Effect1, Effect2, ... }
+        E   error type (ADT — propagates automatically)
+        R   effect set (interfaces — must be handled explicitly)
 
-    The effect row contains ALL algebraic effects —
-    both "dependencies" and "errors" are effects:
+    Errors and effects are SEPARATE channels:
 
-    getUser : Int -> Effect User { Database, Fail NotFoundError }
+    getUser : Int -> Effect User NotFoundError { Database }
+    --                       A   E              R
 
-    The compiler determines how to lower each effect
-    to Effect TS (service vs error) based on the effect
-    declaration. See ALGEBRAIC EFFECTS section.
-
-    Signal A E
+    Signal A E R
         Pure reactive computation with the same structure.
         Compiler infers Signal when body contains no !.
         Signal and Effect compile to the same Effect.Effect<A,E,R>
@@ -749,15 +779,31 @@ Constraint      = TypeVar ':' TypeIdent ;
     TRef A          mutable reference  (transaction context)
     Unit            absence of value  ()
 
-    EFFECT ROW SYNTAX
-    ─────────────────
+    ERROR TYPES (E)
+    ───────────────
+    Errors are ADTs. They propagate automatically and
+    union through the call graph:
+
+    NotFoundError                   single error
+    DbError | NotFoundError         error union
+    {}                              no errors (infallible)
+
+    catch narrows the error type:
+    catch expr {
+      NotFound _ -> fallback       -- removes NotFoundError from E
+    }
+
+    EFFECT SETS (R)
+    ───────────────
+    Effects are interfaces. They must be explicitly handled:
+
     {}                              no effects (pure)
     { Console }                     single effect
     { Database, Console }           multiple effects
-    { Database, Console | e }       open row (polymorphic, allows more effects)
+    { Database, Console | r }       open row (polymorphic)
 
     Open rows enable effect polymorphism:
-    map : (a -> Effect b e) -> List a -> Effect (List b) e
+    mapE : (a -> Effect b e r) -> List a -> Effect (List b) e r
 
     PRELUDE TYPES (defined as ADTs in @bang/std)
     ─────────────
@@ -781,10 +827,10 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     Resource A = {
         value   : A,
-        cleanup : Effect Unit {}
+        cleanup : Effect Unit {} {}
     }
 
-    withX : (Resource X -> Effect A { x }) -> Effect A {}
+    withX : (Resource X -> Effect A {} { x }) -> Effect A {} {}
 
     The handler must consume the resource within its scope.
     The resource never escapes. Cleanup is guaranteed.
@@ -801,9 +847,13 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     MUST-HANDLE
     ───────────
-    Any expression of type Effect A D E or Result A E
+    Any expression of type Effect A E R or Result A E
     appearing in statement position without force
     is a type error.
+
+    Unhandled effects (non-empty R) at the top-level !
+    boundary is a compile error. All effects must be
+    handled before Effect.runPromise.
 *)
 
 
