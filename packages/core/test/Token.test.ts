@@ -26,7 +26,7 @@ describe("Token", () => {
       endCol: 7,
       endOffset: 7,
     });
-    const token = Token.Keyword({ value: "declare", span });
+    const token = new Token.Keyword({ value: "declare", span });
     expect(token._tag).toBe("Keyword");
     expect(token.value).toBe("declare");
   });
@@ -40,7 +40,7 @@ describe("Token", () => {
       endCol: 3,
       endOffset: 3,
     });
-    const token = Token.Ident({ value: "foo", span });
+    const token = new Token.Ident({ value: "foo", span });
     expect(token._tag).toBe("Ident");
     expect(token.value).toBe("foo");
   });
@@ -54,7 +54,7 @@ describe("Token", () => {
       endCol: 6,
       endOffset: 6,
     });
-    const token = Token.TypeIdent({ value: "Effect", span });
+    const token = new Token.TypeIdent({ value: "Effect", span });
     expect(token._tag).toBe("TypeIdent");
   });
 
@@ -67,7 +67,7 @@ describe("Token", () => {
       endCol: 7,
       endOffset: 7,
     });
-    const token = Token.StringLit({ value: "hello", span });
+    const token = new Token.StringLit({ value: "hello", span });
     expect(token._tag).toBe("StringLit");
   });
 
@@ -80,7 +80,7 @@ describe("Token", () => {
       endCol: 1,
       endOffset: 1,
     });
-    const token = Token.Operator({ value: "=", span });
+    const token = new Token.Operator({ value: "=", span });
     expect(token._tag).toBe("Operator");
   });
 
@@ -93,7 +93,7 @@ describe("Token", () => {
       endCol: 1,
       endOffset: 1,
     });
-    const token = Token.Delimiter({ value: "{", span });
+    const token = new Token.Delimiter({ value: "{", span });
     expect(token._tag).toBe("Delimiter");
   });
 
@@ -106,7 +106,7 @@ describe("Token", () => {
       endCol: 0,
       endOffset: 0,
     });
-    const token = Token.EOF({ span });
+    const token = new Token.EOF({ span });
     expect(token._tag).toBe("EOF");
   });
 });
