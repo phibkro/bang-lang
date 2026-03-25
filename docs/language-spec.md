@@ -52,16 +52,79 @@ Declaration     = 'mut'? Ident '=' Expr
                 | Ident ':' Type
                 | Ident ':' Type Ident Param* '=' Block
                 | 'comptime' Ident '=' Expr
-                | 'type' TypeIdent TypeVar* '=' Type
+                | 'type' TypeIdent TypeVar* '=' TypeBody
                 | 'declare' Ident ':' Type
                 ;
 
-(*
-    'type' covers two cases inferred by the compiler:
+TypeBody        = Type                                  (* newtype / alias *)
+                | '|' Constructor ('|' Constructor)*    (* algebraic data type *)
+                ;
 
-    type UserId = String            -- newtype, distinct from String
-    type Name = String              -- distinct from UserId despite same rep
-    type Pair A B = (A, B)         -- parameterised type alias
+Constructor     = TypeIdent                             (* nullary *)
+                | TypeIdent '{' Field (',' Field)* '}'  (* named fields *)
+                | TypeIdent Type+                       (* positional *)
+                ;
+
+Field           = Ident ':' Type ;
+
+(*
+    TYPE DECLARATIONS
+    ─────────────────
+
+    'type' covers four cases:
+
+    1. NEWTYPE (branded wrapper)
+       type UserId = String
+       type Name = String
+       -- UserId ≠ Name ≠ String. All three are distinct types.
+
+    2. PARAMETERISED ALIAS
+       type Pair A B = (A, B)
+       type Pairs A B = List (Pair A B)
+
+    3. ALGEBRAIC DATA TYPE (sum type)
+       type Maybe A
+         | Some A
+         | None
+
+       type Result A E
+         | Ok A
+         | Err E
+
+       type Shape
+         | Circle { radius: Float }
+         | Rectangle { width: Float, height: Float }
+         | Point
+
+       type List A
+         | Cons A (List A)
+         | Nil
+
+    4. RECORD TYPE (product type, named fields)
+       type User = {
+         name: String,
+         age: Int,
+         email: String
+       }
+
+    GENERICS
+    ────────
+    Type variables are lowercase. All type declarations
+    can be parameterised:
+
+    type Box A = { value: A }
+    type Either A B
+      | Left A
+      | Right B
+
+    Generic functions use implicit quantification:
+    id : a -> a
+    map : (a -> b) -> List a -> List b
+    compose : (b -> c) -> (a -> b) -> (a -> c)
+
+    Constraints restrict type variables:
+    show : a -> String where a : Show
+    compare : a -> a -> Int where a : Ord
 
     TYPE SYSTEM: NOMINAL vs STRUCTURAL
     ───────────────────────────────────
@@ -71,26 +134,57 @@ Declaration     = 'mut'? Ident '=' Expr
 
     type UserId = String
     type Name = String
-    -- UserId ≠ Name ≠ String. All three are distinct types.
-
-    Coercion requires explicit constructor/destructor:
+    -- UserId ≠ Name ≠ String. Coercion required:
     userId = UserId "abc"           -- wrap: String -> UserId
     raw = UserId.unwrap userId      -- unwrap: UserId -> String
+
+    ADT constructors are functions:
+    Some 42                         -- Some : a -> Maybe a
+    Cons 1 (Cons 2 Nil)             -- Cons : a -> List a -> List a
+    Circle { radius: 5.0 }         -- Circle : { radius: Float } -> Shape
 
     Anonymous types (records, tuples, functions, effects) are STRUCTURAL.
     Two anonymous types with the same shape are the same type:
     { name: String, age: Int } == { name: String, age: Int }
     (String -> Int) == (String -> Int)
 
+    SCHEMA INTEGRATION
+    ──────────────────
+    Every 'type' declaration automatically derives a Schema.
+    This gives every type, for free:
+
+    - decode : String -> Effect T {} DecodeError
+    - encode : T -> String
+    - Equality and Hash (via Equal, Hash)
+    - Arbitrary generation (for property testing)
+    - JSON Schema derivation
+
+    type User = {
+      name: String,
+      age: Int
+    }
+    -- User.decode, User.encode, User.schema all available
+    -- User values support == via derived Equal
+    -- Property tests get User.arbitrary for free
+
+    type Shape
+      | Circle { radius: Float }
+      | Rectangle { width: Float, height: Float }
+    -- Shape.decode handles tagged discrimination automatically
+    -- Pattern matching on Shape is exhaustive
+
+    Schema is not a library you import. It is the native
+    type representation. Every Bang type IS a Schema.
+
     EQUALITY
     ────────
     == requires operands of the same type.
     Cross-type comparison is a type error:
     userId == name                  -- TYPE ERROR: UserId ≠ Name
-    userId1 == userId2              -- OK: same type
+    userId1 == userId2              -- OK: same type, derived Equal
 
-    Value equality delegates to the underlying representation.
-    Effect's Equal trait is the mechanism for custom equality.
+    Value equality is derived automatically from the Schema.
+    Custom equality can override via the Equal trait.
 *)
 
 
@@ -269,14 +363,30 @@ Arm             = Pattern '->' Expr ;
     All Arms must return the same type.
     Arms are checked top to bottom, first match wins.
 
-    Compiles to:
+    ADT MATCHING
+    ────────────
+    match shape {
+      Circle c     -> !console.log c.radius
+      Rectangle r  -> !console.log (r.width * r.height)
+      Point        -> !console.log "point"
+    }
+
+    Nested patterns:
+    match result {
+      Ok (Some value) -> value
+      Ok None         -> defaultValue
+      Err e           -> !handleError e
+    }
+
+    Compiles to tag-checked switch with exhaustiveness
+    verified at compile time. Uses the Schema-derived
+    _tag field on each constructor.
+
+    For Effect error channel matching:
     yield* Effect.matchEffect(expr, {
         onSuccess: (a) => handler,
         onFailure: (e) => handler
     })
-
-    For ADTs, compiles to a series of tag checks
-    with exhaustiveness verified at compile time.
 *)
 
 
@@ -440,12 +550,15 @@ Constraint      = TypeVar ':' TypeIdent ;
     BUILT-IN TYPE CONSTRUCTORS
     ──────────────────────────
 
+    These are the compiler-primitive types. They cannot
+    be defined in user code because the compiler has
+    special knowledge of them:
+
     Signal A D E
         Pure reactive computation.
         A   value type
         D   dependency set  { ident* }
         E   error type
-        Documents purity intent.
         Compiler infers -- annotation optional.
 
     Effect A D E
@@ -453,18 +566,34 @@ Constraint      = TypeVar ':' TypeIdent ;
         A   value type
         D   resource dependency set  { ident* }
         E   error type
-        Documents side effect intent.
         Compiler infers -- annotation optional.
 
     Signal and Effect are semantically distinct
     but compile to the same Effect.Effect<A,E,D>.
 
-    Result A E      materialised failable value
-    Maybe A         optional value
-    List A          linked list
     Ref A           mutable reference  (plain context)
     TRef A          mutable reference  (transaction context)
     Unit            absence of value  ()
+
+    PRELUDE TYPES (defined as ADTs in @bang/std)
+    ─────────────
+    These are regular Bang types, not compiler primitives.
+    They ship in the prelude and are auto-imported:
+
+    type Maybe A
+      | Some A
+      | None
+
+    type Result A E
+      | Ok A
+      | Err E
+
+    type List A
+      | Cons A (List A)
+      | Nil
+
+    Because they are Schema-backed ADTs, they get
+    decode/encode/equality/arbitrary for free.
 
     DEPENDENCY SETS
     ───────────────
@@ -653,12 +782,34 @@ Constraint      = TypeVar ':' TypeIdent ;
     from M import f                     import { f } from 'M'
     export f                            export { f }
 
-    type UserId = String                type UserId = string
-                                        & Brand.Brand<'UserId'>
-                                        const UserId = Brand.nominal<UserId>()
-    UserId "abc"                        UserId("abc")   -- wrap
-    UserId.unwrap userId                userId           -- unwrap (type cast)
+    -- Newtypes (branded):
+    type UserId = String                class UserId extends Schema.Class<UserId>("UserId")({
+                                          value: Schema.String
+                                        }) {}
+    UserId "abc"                        new UserId({ value: "abc" })
+    UserId.unwrap userId                userId.value
 
+    -- Parameterised aliases:
     type Pair A B = (A, B)             type Pair<A, B> = [A, B]
+
+    -- Algebraic data types:
+    type Maybe A                        const Maybe = Data.taggedEnum<...>()
+      | Some A                          -- + Schema.Union of tagged structs
+      | None
+    Some 42                             Maybe.Some({ _0: 42 })
+    None                                Maybe.None({})
+
+    -- Record types (Schema-backed):
+    type User = {                       class User extends Schema.Class<User>("User")({
+      name: String,                       name: Schema.String,
+      age: Int                            age: Schema.Int
+    }                                   }) {}
+    -- User.decode, User.encode, User.schema auto-derived
+
+    -- Generic functions:
+    id : a -> a                         const id = <A>(a: A): A => a
+    map : (a -> b) -> List a            const map = <A, B>(
+        -> List b                         f: (a: A) => B, xs: List<A>
+                                        ): List<B> => ...
 *)
 ```
