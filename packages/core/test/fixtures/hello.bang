@@ -1,0 +1,4 @@
+declare console.log : String -> Effect Unit { stdout } {}
+
+greeting = "hello, bang"
+!console.log greeting

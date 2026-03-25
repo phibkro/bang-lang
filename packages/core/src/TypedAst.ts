@@ -1,4 +1,5 @@
 import type * as Ast from "./Ast.js";
+import type { Span } from "./Span.js";
 
 export interface TypeAnnotation {
   readonly type: Ast.Type;
@@ -16,3 +17,15 @@ export const annotate = <T extends Ast.Node>(
   node: T,
   annotation: TypeAnnotation,
 ): TypedNode<T> => ({ node, annotation });
+
+// ---------------------------------------------------------------------------
+// Typed program structure
+// ---------------------------------------------------------------------------
+
+export type TypedStmt = TypedNode<Ast.Stmt>;
+
+export interface TypedProgram {
+  readonly _tag: "Program";
+  readonly statements: TypedStmt[];
+  readonly span: Span;
+}

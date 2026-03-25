@@ -78,9 +78,7 @@ describe("Lexer", () => {
   it.effect("lexes bracket delimiters", () =>
     Effect.gen(function* () {
       const tokens = yield* Lexer.tokenize("[ ]");
-      const values = tokens
-        .filter((t) => t._tag === "Delimiter")
-        .map((t) => (t as any).value);
+      const values = tokens.filter((t) => t._tag === "Delimiter").map((t) => (t as any).value);
       expect(values).toEqual(["[", "]"]);
     }),
   );
