@@ -39,7 +39,7 @@ const KEYWORDS = new Set([
   "scoped",
 ]);
 
-const DELIMITERS = new Set(["{", "}", "(", ")", ":", ";", ","]);
+const DELIMITERS = new Set(["{", "}", "(", ")", "[", "]", ":", ";", ","]);
 
 const TWO_CHAR_OPS: Record<string, string> = {
   "->": "->",

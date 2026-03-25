@@ -75,6 +75,16 @@ describe("Lexer", () => {
     }),
   );
 
+  it.effect("lexes bracket delimiters", () =>
+    Effect.gen(function* () {
+      const tokens = yield* Lexer.tokenize("[ ]");
+      const values = tokens
+        .filter((t) => t._tag === "Delimiter")
+        .map((t) => (t as any).value);
+      expect(values).toEqual(["[", "]"]);
+    }),
+  );
+
   it.effect("lexes the full v0.1 target program", () =>
     Effect.gen(function* () {
       const source = `declare console.log : String -> Effect Unit { stdout } {}
