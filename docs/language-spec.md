@@ -51,11 +51,12 @@ Statement       = Declaration
 
 Declaration     = 'mut'? Ident '=' Expr
                 | Ident ':' Type
-                | Ident ':' Type Ident Param* '=' Block
                 | 'comptime' Ident '=' Expr
                 | 'type' TypeIdent TypeVar* '=' TypeBody
-                | 'declare' Ident ':' Type
+                | 'declare' QualifiedIdent ':' Type
                 ;
+
+QualifiedIdent  = Ident ('.' Ident)* ;
 
 TypeBody        = Type                                  (* newtype / alias *)
                 | '|' Constructor ('|' Constructor)*    (* algebraic data type *)
@@ -80,25 +81,25 @@ Field           = Ident ':' Type ;
        -- UserId ≠ Name ≠ String. All three are distinct types.
 
     2. PARAMETERISED ALIAS
-       type Pair A B = (A, B)
-       type Pairs A B = List (Pair A B)
+       type Pair a b = (a, b)
+       type Pairs a b = List (Pair a b)
 
     3. ALGEBRAIC DATA TYPE (sum type)
-       type Maybe A
-         | Some A
+       type Maybe a
+         | Some a
          | None
 
-       type Result A E
-         | Ok A
-         | Err E
+       type Result a e
+         | Ok a
+         | Err e
 
        type Shape
          | Circle { radius: Float }
          | Rectangle { width: Float, height: Float }
          | Point
 
-       type List A
-         | Cons A (List A)
+       type List a
+         | Cons a (List a)
          | Nil
 
     4. RECORD TYPE (product type, named fields)
@@ -110,13 +111,18 @@ Field           = Ident ':' Type ;
 
     GENERICS
     ────────
-    Type variables are lowercase. All type declarations
-    can be parameterised:
+    Type variables are always lowercase. Concrete types
+    are always uppercase (TypeIdent). This is how the
+    parser distinguishes them — no ambiguity:
 
-    type Box A = { value: A }
-    type Either A B
-      | Left A
-      | Right B
+    a, b, e, r          type variables (lowercase)
+    Int, String, Maybe   concrete types (uppercase)
+
+    All type declarations can be parameterised:
+    type Box a = { value: a }
+    type Either a b
+      | Left a
+      | Right b
 
     Generic functions use implicit quantification:
     id : a -> a
@@ -142,7 +148,7 @@ Field           = Ident ':' Type ;
     ADT constructors are functions:
     Some 42                         -- Some : a -> Maybe a
     Cons 1 (Cons 2 Nil)             -- Cons : a -> List a -> List a
-    Circle { radius: 5.0 }         -- Circle : { radius: Float } -> Shape
+    Circle { radius: 5.0 }          -- Circle : { radius: Float } -> Shape
 
     Anonymous types (records, tuples, functions, effects) are STRUCTURAL.
     Two anonymous types with the same shape are the same type:
@@ -222,7 +228,7 @@ Force           = '!' Expr ;
 (*
     Force resolves by type of Expr:
 
-    Expr : Effect A D E   ->  yield* Expr
+    Expr : Effect A E R   ->  yield* Expr
     Expr : Promise A      ->  yield* Effect.promise(() => Expr)
     Expr : () -> A        ->  yield* Effect.sync(() => Expr())
     Expr : A              ->  Expr  (no-op, plain value)
@@ -232,7 +238,7 @@ Force           = '!' Expr ;
     identifier and resolves force appropriately.
     No explicit FFI syntax required.
 
-    declare console.log : String -> Effect Unit { stdout } {}
+    declare console.log : String -> Effect Unit {} { Console }
     !console.log "hello"    -- compiler resolves and wraps
 
     Top-level Force causes the module to be wrapped
@@ -285,6 +291,10 @@ EffectDecl      = 'effect' TypeIdent TypeVar* '{' Operation+ '}' ;
 
 Operation       = Ident ':' Type ;
 
+HandlerBody     = '{' HandlerArm (',' HandlerArm)* '}' ;
+
+HandlerArm      = TypeIdent '->' Expr ;
+
 (*
     EFFECT INTERFACES
     ─────────────────
@@ -312,14 +322,14 @@ Operation       = Ident ':' Type ;
     }
 
     Errors are effects whose operations return Nothing:
-    effect Fail E {
-      fail : E -> Nothing
+    effect Fail e {
+      fail : e -> Nothing
     }
 
     Effects can be parameterised:
-    effect Cache K V {
-      get : K -> Maybe V
-      set : K -> V -> Unit
+    effect Cache k v {
+      get : k -> Maybe v
+      set : k -> v -> Unit
     }
 
     PROVIDING IMPLEMENTATIONS
@@ -474,8 +484,8 @@ Operation       = Ident ':' Type ;
                                           }>() {}
 
     Operations returning Nothing → Tagged error (E parameter):
-    effect Fail E {                     class NotFoundError extends
-      fail : E -> Nothing                 Data.TaggedError("NotFoundError")<{
+    effect Fail e {                     class NotFoundError extends
+      fail : e -> Nothing                 Data.TaggedError("NotFoundError")<{
     }                                       ...}>() {}
 
     Implementations → Layer:
@@ -511,8 +521,8 @@ Operation       = Ident ':' Type ;
       fetch : String -> Response
     }
 
-    effect Fail E {                 -- generic error effect
-      fail : E -> Nothing           -- parameterised by error ADT
+    effect Fail e {                 -- generic error effect
+      fail : e -> Nothing           -- parameterised by error ADT
     }
 
     effect Random {                 randomDefault : Random
@@ -704,19 +714,19 @@ Transaction     = '!' 'transaction' Block ;
 
     !all [e1, e2, ...]
     Force all concurrently. Returns tuple of all results.
-    all : List (Effect A D E) -> Effect (List A) D E
+    all : List (Effect A E R) -> Effect (List A) E R
     Compiles to:
     yield* Effect.all([e1, e2, ...], { concurrency: 'unbounded' })
 
     !race [e1, e2, ...]
     Force concurrently. Returns first result, cancels rest.
-    race : List (Effect A D E) -> Effect A D E
+    race : List (Effect A E R) -> Effect A E R
     Compiles to:
     yield* Effect.race(e1, e2, ...)
 
     !fork e
     Fork into background fiber. Returns Fiber handle.
-    fork : Effect A D E -> Effect (Fiber A E) {} {}
+    fork : Effect A E R -> Effect (Fiber A E) {} {}
     Compiles to:
     yield* Effect.fork(e)
 
@@ -791,9 +801,16 @@ Type            = TypeIdent Type+                                               
                 | TypeVar 'where' Constraint (',' Constraint)*                 (* constrained *)
                 | TypeVar                                                       (* variable *)
                 | '{' Ident ':' Type (',' Ident ':' Type)* '}'                (* record *)
+                | EffectRow                                                     (* effect row *)
                 | '[' Type ']'                                                  (* list *)
                 | '(' Type (',' Type)+ ')'                                     (* tuple *)
+                | '(' Type ')'                                                  (* grouping *)
                 | '(' ')'                                                       (* unit *)
+                ;
+
+EffectRow       = '{' '}'                                                       (* empty row *)
+                | '{' TypeIdent TypeVar* (',' TypeIdent TypeVar*)* '}'         (* closed row *)
+                | '{' TypeIdent TypeVar* (',' TypeIdent TypeVar*)* '|' TypeVar '}' (* open row *)
                 ;
 
 TypeVar         = [a-z]+ ;
@@ -855,16 +872,16 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     PRELUDE TYPES (defined as ADTs in @bang/std)
     ─────────────
-    type Maybe A
-      | Some A
+    type Maybe a
+      | Some a
       | None
 
-    type Result A E
-      | Ok A
-      | Err E
+    type Result a e
+      | Ok a
+      | Err e
 
-    type List A
-      | Cons A (List A)
+    type List a
+      | Cons a (List a)
       | Nil
 
     Schema-backed: decode/encode/equality/arbitrary for free.
@@ -923,8 +940,8 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     Foreign functions are declared with 'declare':
 
-    declare console.log : String -> Effect Unit { Console }
-    declare fetch : String -> Effect Response { Http, Fail HttpError }
+    declare console.log : String -> Effect Unit {} { Console }
+    declare fetch : String -> Effect Response { Fail HttpError } { Http }
 
     Then called like any BANG function:
 
@@ -1077,7 +1094,7 @@ Constraint      = TypeVar ':' TypeIdent ;
     type Pair A B = (A, B)             type Pair<A, B> = [A, B]
 
     -- Algebraic data types:
-    type Maybe A                        const Maybe = Data.taggedEnum<...>()
+    type Maybe a                        const Maybe = Data.taggedEnum<...>()
       | Some A                          -- + Schema.Union of tagged structs
       | None
     Some 42                             Maybe.Some({ _0: 42 })
