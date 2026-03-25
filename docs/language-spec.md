@@ -771,7 +771,7 @@ Literal         = Integer
                 | Float
                 | String
                 | Bool
-                | List
+                | Array
                 | Unit
                 ;
 
@@ -783,7 +783,7 @@ StringPart      = [^"\\$]+                      (* plain text *)
                 | '${' Expr '}'                 (* interpolation *)
                 ;
 Bool            = 'true' | 'false' ;
-List            = '[' (Expr (',' Expr)*)? ']' ;
+Array           = '[' (Expr (',' Expr)*)? ']' ;
 
 (*
     STRING INTERPOLATION
@@ -830,7 +830,7 @@ Type            = TypeIdent Type+                                               
                 | TypeVar                                                       (* variable *)
                 | '{' Ident ':' Type (',' Ident ':' Type)* '}'                (* record *)
                 | EffectRow                                                     (* effect row *)
-                | '[' Type ']'                                                  (* list *)
+                | '[' Type ']'                                                  (* array *)
                 | '(' Type (',' Type)+ ')'                                     (* tuple *)
                 | '(' Type ')'                                                  (* grouping *)
                 | '(' ')'                                                       (* unit *)
@@ -867,14 +867,47 @@ Constraint      = TypeVar ':' TypeIdent ;
     infers E and R from operations used in the body.
 
     Signal A E R
-        Pure reactive computation with the same structure.
+        Push-based reactive computation.
         Compiler infers Signal when body contains no !.
         Signal and Effect compile to the same Effect.Effect<A,E,R>
-        but Signal documents purity intent.
+        but Signal documents purity and reactivity intent.
 
     Ref A           mutable reference  (plain context)
     TRef A          mutable reference  (transaction context)
     Unit            absence of value  ()
+
+    REACTIVE PROPAGATION (push-based)
+    ─────────────────────────────────
+    When a Ref changes, all dependent Signals automatically
+    re-evaluate. This is push-based reactivity — changes
+    propagate eagerly through the dependency graph.
+
+    mut count = 0
+    doubled : Signal Int {} {}
+    doubled = count * 2
+
+    count <- 1
+    -- doubled is now 2 (pushed automatically)
+
+    count <- 5
+    -- doubled is now 10
+
+    The compiler builds a dependency graph at compile time.
+    At runtime, Ref updates trigger re-evaluation of all
+    downstream Signals via Effect's SubscriptionRef.
+
+    Signals are memoised — a Signal only re-evaluates when
+    its dependencies actually change, not on every read.
+
+    Closures capture reactive references by default:
+    g = () -> { count * 3 }     -- reactive: tracks count
+    g = () -> { (!count) * 3 }  -- snapshot: captures current value
+
+    Signals compose:
+    mut width = 10
+    mut height = 20
+    area = width * height       -- Signal, tracks both
+    label = "area: ${area}"     -- Signal, tracks area (and transitively width, height)
 
     ERROR EFFECTS (E)
     ─────────────────
@@ -898,7 +931,7 @@ Constraint      = TypeVar ':' TypeIdent ;
     Open rows enable effect polymorphism:
     mapE : (a -> Effect b e r) -> List a -> Effect (List b) e r
 
-    PRELUDE TYPES (defined as ADTs in @bang/std)
+    PRELUDE TYPES (defined in @bang/std)
     ─────────────
     type Maybe a
       | Some a
@@ -912,7 +945,32 @@ Constraint      = TypeVar ':' TypeIdent ;
       | Cons a (List a)
       | Nil
 
-    Schema-backed: decode/encode/equality/arbitrary for free.
+    Array a         built-in array type (JS array underneath)
+
+    Schema-backed ADTs get decode/encode/equality/arbitrary for free.
+
+    ARRAY vs LIST
+    ─────────────
+    Array is the default collection. List literals produce Arrays:
+    [1, 2, 3] : Array Int       -- JS array, fast, indexable
+
+    List a (Cons/Nil) is for recursive patterns and
+    functional algorithms. Use when you need cons-cell semantics:
+    myList = Cons 1 (Cons 2 (Cons 3 Nil)) : List Int
+
+    Pattern matching on Arrays uses head/tail syntax:
+    match items {
+      []            -> "empty"
+      [x]           -> "one: ${x}"
+      [x, ...rest]  -> "first: ${x}, rest has ${rest.length}"
+    }
+
+    Pattern matching on List uses constructor patterns:
+    match myList {
+      Nil          -> "empty"
+      Cons x Nil   -> "one: ${x}"
+      Cons x rest  -> "first: ${x}"
+    }
 
     RESOURCE TYPES
     ──────────────
