@@ -24,7 +24,8 @@ const peek = (s: ParseState): Token => {
   if (t !== undefined) return t;
   const last = s.tokens[s.tokens.length - 1];
   if (last !== undefined) return last;
-  throw new Error("Empty token array"); // unreachable — tokenize always produces EOF
+  // eslint-disable-next-line functional/no-throw-statements -- defect: unreachable if tokenize produces EOF
+  throw new Error("Empty token array");
 };
 
 const peekAt = (s: ParseState, ahead: number): Option.Option<Token> =>
