@@ -1,29 +1,16 @@
+import { Array, Match, Option } from "effect";
 import type { CompilerError } from "./CompilerError.js";
 
-const categoryFromTag = (tag: string): string => {
-  switch (tag) {
-    case "LexError":
-      return "lex";
-    case "ParseError":
-      return "parse";
-    case "CheckError":
-      return "check";
-    case "CodegenError":
-      return "codegen";
-    default:
-      return tag.toLowerCase();
-  }
-};
-
 export const format = (error: CompilerError, source: string): string => {
-  const { _tag, message, span, hint } = error as CompilerError & {
-    _tag: string;
-    message: string;
-    span: { startLine: number; startCol: number; endCol: number };
-    hint?: string;
-  };
+  const category = Match.value(error).pipe(
+    Match.tag("LexError", () => "lex"),
+    Match.tag("ParseError", () => "parse"),
+    Match.tag("CheckError", () => "check"),
+    Match.tag("CodegenError", () => "codegen"),
+    Match.exhaustive,
+  );
 
-  const category = categoryFromTag(_tag);
+  const { message, span, hint } = error;
   const lines = source.split("\n");
   const lineIndex = span.startLine - 1;
   const sourceLine = lines[lineIndex] ?? "";
@@ -40,14 +27,14 @@ export const format = (error: CompilerError, source: string): string => {
     `${lineNum} | ${sourceLine}`,
     `${gutter}  | ${caretPad}${carets}`,
     `${gutter}  |`,
+    ...Option.match(Option.fromNullable(hint), {
+      onNone: () => [] as string[],
+      onSome: (h) => [`${gutter}  = hint: ${h}`],
+    }),
   ];
-
-  if (hint !== undefined) {
-    parts.push(`${gutter}  = hint: ${hint}`);
-  }
 
   return parts.join("\n");
 };
 
 export const formatAll = (errors: CompilerError[], source: string): string =>
-  errors.map((e) => format(e, source)).join("\n\n");
+  Array.map(errors, (e) => format(e, source)).join("\n\n");

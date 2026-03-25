@@ -1,3 +1,4 @@
+import { HashMap, Option } from "effect";
 import type { Span } from "./Span.js";
 
 export interface TSPosition {
@@ -5,24 +6,24 @@ export interface TSPosition {
   readonly col: number;
 }
 
+const posKey = (pos: TSPosition): string => `${pos.line}:${pos.col}`;
+
 export interface SourceMap {
-  readonly entries: Map<string, Span>;
+  readonly entries: HashMap.HashMap<string, Span>;
   readonly size: number;
 }
 
-export const empty = (): SourceMap => {
-  const entries = new Map<string, Span>();
-  return {
-    entries,
-    get size() {
-      return entries.size;
-    },
-  };
-};
+export const empty = (): SourceMap => ({
+  entries: HashMap.empty(),
+  get size() {
+    return HashMap.size(this.entries);
+  },
+});
 
-export const add = (map: SourceMap, tsPos: TSPosition, bangSpan: Span): void => {
-  map.entries.set(`${tsPos.line}:${tsPos.col}`, bangSpan);
-};
+export const add = (map: SourceMap, tsPos: TSPosition, bangSpan: Span): SourceMap => ({
+  ...map,
+  entries: HashMap.set(map.entries, posKey(tsPos), bangSpan),
+});
 
-export const lookup = (map: SourceMap, tsPos: TSPosition): Span | undefined =>
-  map.entries.get(`${tsPos.line}:${tsPos.col}`);
+export const lookup = (map: SourceMap, tsPos: TSPosition): Option.Option<Span> =>
+  HashMap.get(map.entries, posKey(tsPos));
