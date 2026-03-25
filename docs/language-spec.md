@@ -285,10 +285,6 @@ EffectDecl      = 'effect' TypeIdent TypeVar* '{' Operation+ '}' ;
 
 Operation       = Ident ':' Type ;
 
-HandleExpr      = 'handle' Expr '{' Handler+ '}' ;
-
-Handler         = TypeIdent '->' Expr ;
-
 (*
     EFFECT INTERFACES
     ─────────────────
@@ -368,39 +364,79 @@ Handler         = TypeIdent '->' Expr ;
       }
     }
 
-    HANDLING EFFECTS
-    ────────────────
-    handle is unified — it handles both dependency effects
-    (from R) and error effects (from E) in the same block:
+    HANDLING CHANNELS
+    ─────────────────
+    All three channels (A, E, R) are handled via composable
+    methods on Effect using dot syntax:
 
-    !handle (getUser 42) {
-      Database -> pgDatabase,
-      Fail     -> { fail = (e) -> { None } }
-    }
+    .handle { ... }     provides dependencies  (eliminates from R)
+    .catch  { ... }     recovers from errors   (eliminates from E)
+    .map    (x) -> expr transforms the value   (transforms A)
 
-    Handlers are always explicit. You see exactly which
-    implementation is used by reading the code.
+    These compose left-to-right via the dot operator:
 
-    Handling a dependency eliminates it from R:
-    !handle myApp {
-      Database -> pgDatabase,
-      Console  -> consoleNode
-    }
+    result = getUser 42
+      .handle { Database -> pgDatabase }
+      .catch { NotFound _ -> defaultUser }
+      .map (user) -> { user.name }
 
-    Handling an error eliminates it from E:
-    !handle (getUser 42) {
-      Fail -> { fail = (e) -> { fallbackValue } }
-    }
+    !Console.log result
 
-    Inline handlers for one-offs:
-    !handle myApp {
-      Database -> {
-        query  = (sql) -> { !pg.query sql },
-        insert = (row) -> { !pg.insert row }
+    HANDLING DEPENDENCIES (.handle)
+    ───────────────────────────────
+    .handle provides implementations and eliminates from R:
+
+    getUser 42
+      .handle { Database -> pgDatabase }
+
+    Multiple dependencies:
+    myApp
+      .handle {
+        Database -> pgDatabase,
+        Console  -> consoleNode
       }
-    }
 
-    EFFECT COMPOSITION
+    Inline implementations:
+    myApp
+      .handle {
+        Database -> {
+          query  = (sql) -> { !pg.query sql },
+          insert = (row) -> { !pg.insert row }
+        }
+      }
+
+    HANDLING ERRORS (.catch)
+    ────────────────────────
+    .catch recovers from errors and eliminates from E:
+
+    getUser 42
+      .catch { NotFound _ -> defaultUser }
+
+    Partial catch (only handles some errors):
+    getUser 42
+      .catch { NotFound _ -> defaultUser }
+    -- DbError still in E, NotFoundError eliminated
+
+    TRANSFORMING VALUES (.map)
+    ──────────────────────────
+    .map transforms the success value:
+
+    getUser 42
+      .map (user) -> { user.name }
+
+    FULL COMPOSITION
+    ────────────────
+    All handlers chain naturally. ! forces the final result:
+
+    !getUser 42
+      .handle { Database -> pgDatabase }
+      .catch { NotFound _ -> defaultUser }
+      .map (user) -> { user.name }
+
+    Without !, you're building a description of the computation.
+    ! at the start of a statement forces it.
+
+    EFFECT PROPAGATION
     ──────────────────
     Effects compose through the call graph. Calling a
     function that uses effects adds them to yours:
@@ -417,10 +453,9 @@ Handler         = TypeIdent '->' Expr ;
     Swap implementations by passing different handlers:
 
     testGetUser = {
-      result = !handle (getUser 42) {
-        Database -> mockDatabase,
-        Fail -> { fail = (e) -> { None } }
-      }
+      result = !getUser 42
+        .handle { Database -> mockDatabase }
+        .catch { NotFound _ -> None }
       !assert (result.name == "test user")
     }
 
@@ -448,11 +483,13 @@ Handler         = TypeIdent '->' Expr ;
                                           query: (sql) => ...
                                         }
 
-    Handlers → Effect.provide / Effect.catchTag:
-    !handle expr {                      pipe(expr,
-      Database -> pgDatabase              Effect.provide(
-    }                                       Layer.succeed(Database, pgDatabase)
-                                          ))
+    Channel handlers compile to:
+    .handle { Database -> pgDatabase }  pipe(expr, Effect.provide(
+                                          Layer.succeed(Database, pgDatabase)))
+    .catch { NotFound _ -> default }    pipe(expr, Effect.catchTag(
+                                          "NotFound", (_) => default))
+    .map (x) -> { x.name }             pipe(expr, Effect.map(
+                                          (x) => x.name))
 
     PRELUDE EFFECTS
     ───────────────
@@ -540,7 +577,6 @@ Expr            = Expr '.' Ident Atom*              (* composition / field acces
                 | Match                             (* pattern match *)
                 | Lambda                            (* anonymous function *)
                 | Transaction                       (* atomic block *)
-                | HandleExpr                        (* effect handling *)
                 | '(' Expr ')'                      (* grouping *)
                 ;
 
@@ -935,11 +971,10 @@ Constraint      = TypeVar ':' TypeIdent ;
     where           forall          defer
     true            false           if
     transaction     scoped          effect
-    handle
 
-    Note: race, fork, all are standard library functions,
-    not keywords. They are regular identifiers.
-    Console, Database, etc. are effect names (TypeIdent),
+    Note: handle, catch, map are methods on Effect via dot
+    syntax, not keywords. race, fork, all are standard library
+    functions. Console, Database, etc. are effect names (TypeIdent).
     not keywords.
 *)
 
@@ -1019,6 +1054,14 @@ Constraint      = TypeVar ':' TypeIdent ;
 
     top-level !e                        Effect.runPromise(
                                             Effect.gen(function* () { ... }))
+
+    -- Channel handling (composable via dot):
+    e.handle { Db -> impl }             pipe(e, Effect.provide(
+                                          Layer.succeed(Db, impl)))
+    e.catch { NotFound _ -> x }         pipe(e, Effect.catchTag(
+                                          "NotFound", (_) => x))
+    e.map (x) -> { x.name }            pipe(e, Effect.map(
+                                          (x) => x.name))
 
     from M import { f }                 import { f } from 'M'
     export { f }                        export { f }
