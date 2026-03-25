@@ -14,7 +14,11 @@ Vitest is installed at root (devDependency) with a root `vitest.config.ts` setti
 
 **`vp test` quirk:** `vp test` at the workspace root reports "no tests" even when tests pass — this is a vp test runner quirk with the root config. Use `cd packages/core && node_modules/.bin/vitest run` (or same for packages/cli) to verify actual test counts and results. The exit code from `vp test` is still reliable (0 = pass, 1 = fail). Also, `--filter` is not a valid flag for `vp test` (it's not vitest's `--testNamePattern`).
 
-**Test baseline (as of Task 10):** @bang/core: 47 tests across 8 test files. @bang/cli: 1 test (compile command produces .ts output).
+**Test baseline (as of v0.2 Task 7):** @bang/core: 72 tests across 12 test files (4 Interp tests pre-existing failures unrelated to grouping). @bang/cli: 1 test.
+
+**Grouped expression pattern:** `(expr)` is parsed in `parsePrimary` by consuming `(`, calling `parseExprPrec(s1, 0)`, then expecting `)`. No AST wrapping — grouping is transparent. `isArgStart` must include `Delimiter("(")` for grouped expressions to work as function arguments. The lexer produces a `Unit` token (not `Delimiter("()")`) for `()`, so `parsePrimary`'s existing `Unit` case handles unit literals; `Delimiter("(")` is purely for grouping.
+
+**Codegen precedence:** `BinaryExpr` emission must parenthesize sub-expressions with lower JS precedence. Uses a `JS_PREC` table keyed on JS operator strings (after `mapBinaryOp`). Without this, `(1 + 2) * 3` would emit as `1 + 2 * 3` since grouping is transparent in the AST.
 
 **@effect/cli pattern (verified v0.75.x):** `Args.file({ name: "file" })` returns `Args<string>`. `Command.make("name", { filePath })` builds a command with args. Chain `.pipe(Command.withHandler(({ filePath }) => effect))` to add handler. `Command.withSubcommands([...])` attaches subcommands. `Command.run(root, { name, version })` returns `(argv: string[]) => Effect`. Entry point: `cli(process.argv).pipe(Effect.provide(NodeContext.layer), NodeRuntime.runMain)`.
 

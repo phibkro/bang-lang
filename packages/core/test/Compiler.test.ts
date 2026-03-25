@@ -50,4 +50,22 @@ greeting = "hello, bang"
       expect(result.code).toContain("Effect.runPromise");
     }),
   );
+
+  it.effect("compiles the v0.2 target program end-to-end", () =>
+    Effect.gen(function* () {
+      const source = `declare console.log : String -> Effect Unit { stdout } {}
+add = a b -> { a + b }
+double = x -> { x * 2 }
+result = { x = add 3 4; y = double x; x + y }
+!console.log "done"`;
+      const result = yield* Compiler.compile(source);
+      // Lambdas compile as curried plain functions (single-expr optimization)
+      expect(result.code).toContain("const add =");
+      expect(result.code).toContain("const double =");
+      // Block compiles with Effect.gen
+      expect(result.code).toContain("const result =");
+      // Top-level force wraps in Effect.runPromise
+      expect(result.code).toContain("Effect.runPromise");
+    }),
+  );
 });

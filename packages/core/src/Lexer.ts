@@ -152,6 +152,14 @@ const isAlphaNum = (ch: string): boolean => isLowerAlpha(ch) || isUpperAlpha(ch)
 // Token recognizers
 // ---------------------------------------------------------------------------
 
+const ESCAPE_MAP: Record<string, string> = {
+  n: "\\n",
+  t: "\\t",
+  r: "\\r",
+  "\\": "\\\\",
+  '"': '\\"',
+};
+
 const recognizeString: Recognizer = (s) =>
   Option.flatMap(charAt(s), (ch) => {
     if (ch !== '"') return Option.none();
@@ -161,6 +169,19 @@ const recognizeString: Recognizer = (s) =>
         onNone: () => Option.none(), // unterminated — handled as error in scan loop
         onSome: (c) => {
           if (c === "\n") return Option.none();
+          if (c === "\\") {
+            return Option.match(charAt(st, 1), {
+              onNone: () => Option.none(),
+              onSome: (next) => {
+                const mapped = ESCAPE_MAP[next];
+                if (mapped !== undefined) {
+                  return go(acc + mapped, advanceN(st, 2));
+                }
+                // Unknown escape — keep as-is
+                return go(acc + "\\" + next, advanceN(st, 2));
+              },
+            });
+          }
           if (c === '"') {
             const end = advance(st);
             return Option.some([

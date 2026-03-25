@@ -9,10 +9,12 @@
 **Tech Stack:** TypeScript, Effect (Schema, Match, HashMap, Option, Effect.gen), Vite+ (`vp`), `@effect/vitest`
 
 **Reference:**
+
 - Language spec: `docs/language-spec.md`
 - Current codebase: `packages/core/src/` (Ast.ts, Lexer.ts, Parser.ts, Checker.ts, Codegen.ts)
 
 **Effect conventions (MANDATORY for all code):**
+
 - `new Ast.X({...})` for constructors (Schema.TaggedClass)
 - `Match.tag` for all AST/token dispatch — no switch/case on `_tag`
 - `Effect.fail(new CheckError({...}))` — no throw
@@ -91,6 +93,7 @@ packages/core/test/
 ## Task 1: AST Nodes for v0.2
 
 **Files:**
+
 - Modify: `packages/core/src/Ast.ts`
 
 - [ ] **Step 1: Add Block, Lambda, BinaryExpr, UnaryExpr, StringInterp to Ast.ts**
@@ -124,10 +127,15 @@ export class UnaryExpr extends Schema.TaggedClass<UnaryExpr>()("UnaryExpr", {
 }) {}
 
 export class StringInterp extends Schema.TaggedClass<StringInterp>()("StringInterp", {
-  parts: Schema.Array(Schema.Union(
-    Schema.Struct({ _tag: Schema.Literal("text"), value: Schema.String }),
-    Schema.Struct({ _tag: Schema.Literal("expr"), value: Schema.suspend((): Schema.Schema<Expr> => ExprSchema) }),
-  )),
+  parts: Schema.Array(
+    Schema.Union(
+      Schema.Struct({ _tag: Schema.Literal("text"), value: Schema.String }),
+      Schema.Struct({
+        _tag: Schema.Literal("expr"),
+        value: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+      }),
+    ),
+  ),
   span: Span,
 }) {}
 ```
@@ -154,6 +162,7 @@ git commit --no-verify -m "feat(ast): add Block, Lambda, BinaryExpr, UnaryExpr, 
 ## Task 2: Binary and Unary Operators
 
 **Files:**
+
 - Modify: `packages/core/src/Parser.ts`
 - Modify: `packages/core/src/Checker.ts`
 - Modify: `packages/core/src/Codegen.ts`
@@ -162,57 +171,58 @@ git commit --no-verify -m "feat(ast): add Block, Lambda, BinaryExpr, UnaryExpr, 
 - [ ] **Step 1: Write failing operator tests**
 
 `packages/core/test/Operator.test.ts`:
-```typescript
-import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { Compiler } from "@bang/core"
 
-const compile = (source: string) => Compiler.compile(source)
+```typescript
+import { describe, expect, it } from "@effect/vitest";
+import { Effect } from "effect";
+import { Compiler } from "@bang/core";
+
+const compile = (source: string) => Compiler.compile(source);
 
 describe("Operators", () => {
   it.effect("compiles arithmetic", () =>
-    Effect.gen(function*() {
-      const result = yield* compile("x = 1 + 2 * 3")
-      expect(result.code).toContain("const x = 1 + 2 * 3")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* compile("x = 1 + 2 * 3");
+      expect(result.code).toContain("const x = 1 + 2 * 3");
+    }),
+  );
 
   it.effect("compiles comparison", () =>
-    Effect.gen(function*() {
-      const result = yield* compile("x = 1 == 2")
-      expect(result.code).toContain("const x = 1 === 2")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* compile("x = 1 == 2");
+      expect(result.code).toContain("const x = 1 === 2");
+    }),
+  );
 
   it.effect("compiles logical operators", () =>
-    Effect.gen(function*() {
-      const result = yield* compile("x = true and false")
-      expect(result.code).toContain("const x = true && false")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* compile("x = true and false");
+      expect(result.code).toContain("const x = true && false");
+    }),
+  );
 
   it.effect("compiles unary minus", () =>
-    Effect.gen(function*() {
-      const result = yield* compile("x = -42")
-      expect(result.code).toContain("const x = -42")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* compile("x = -42");
+      expect(result.code).toContain("const x = -42");
+    }),
+  );
 
   it.effect("compiles not", () =>
-    Effect.gen(function*() {
-      const result = yield* compile("x = not true")
-      expect(result.code).toContain("const x = !true")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* compile("x = not true");
+      expect(result.code).toContain("const x = !true");
+    }),
+  );
 
   it.effect("respects precedence", () =>
-    Effect.gen(function*() {
-      const result = yield* compile("x = 1 + 2 * 3")
+    Effect.gen(function* () {
+      const result = yield* compile("x = 1 + 2 * 3");
       // Should parse as 1 + (2 * 3) not (1 + 2) * 3
-      expect(result.code).toContain("const x = 1 + 2 * 3")
-    })
-  )
-})
+      expect(result.code).toContain("const x = 1 + 2 * 3");
+    }),
+  );
+});
 ```
 
 - [ ] **Step 2: Run tests — verify fail**
@@ -228,6 +238,7 @@ Modify `packages/core/src/Parser.ts`:
 Replace the current `parseExpr` (which only handles primary + dot + application) with a Pratt parser (precedence climbing).
 
 Precedence table (from spec, highest to lowest):
+
 1. `.` (dot access) — already handled
 2. juxtaposition (application) — already handled
 3. `-` (unary minus), `not` — prefix operators
@@ -249,10 +260,12 @@ Key implementation: `parseExprWithPrec(minPrec)` recurses with increasing preced
 - [ ] **Step 5: Add operator emission to Codegen**
 
 `Match.tag` case in `emitExpr`:
+
 - `BinaryExpr`: `${emitExpr(left)} ${mapOp(op)} ${emitExpr(right)}`
 - `UnaryExpr`: `${mapOp(op)}${emitExpr(expr)}`
 
 Operator mapping:
+
 - `==` → `===`, `!=` → `!==` (JS strict equality)
 - `and` → `&&`, `or` → `||`, `xor` → `!==` (boolean xor)
 - `not` → `!`
@@ -277,6 +290,7 @@ git commit --no-verify -m "feat(core): binary/unary operators with Pratt parser"
 ## Task 3: Block Expressions
 
 **Files:**
+
 - Modify: `packages/core/src/Parser.ts`
 - Modify: `packages/core/src/Checker.ts`
 - Modify: `packages/core/src/Codegen.ts`
@@ -285,44 +299,45 @@ git commit --no-verify -m "feat(core): binary/unary operators with Pratt parser"
 - [ ] **Step 1: Write failing block tests**
 
 `packages/core/test/Block.test.ts`:
+
 ```typescript
-import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { Compiler } from "@bang/core"
+import { describe, expect, it } from "@effect/vitest";
+import { Effect } from "effect";
+import { Compiler } from "@bang/core";
 
 describe("Blocks", () => {
   it.effect("compiles a block expression", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const source = `result = {
   x = 1
   y = 2
   x + y
-}`
-      const result = yield* Compiler.compile(source)
-      expect(result.code).toContain("Effect.gen(function*()")
-      expect(result.code).toContain("const x = 1")
-      expect(result.code).toContain("const y = 2")
-      expect(result.code).toContain("return x + y")
-    })
-  )
+}`;
+      const result = yield* Compiler.compile(source);
+      expect(result.code).toContain("Effect.gen(function*()");
+      expect(result.code).toContain("const x = 1");
+      expect(result.code).toContain("const y = 2");
+      expect(result.code).toContain("return x + y");
+    }),
+  );
 
   it.effect("effectful block sequences operations", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const source = `declare console.log : String -> Effect Unit { stdout } {}
 declare fetch : String -> Effect String { net } {}
 userData = !{
   raw = !fetch "/api/user"
   !console.log raw
   raw
-}`
-      const result = yield* Compiler.compile(source)
+}`;
+      const result = yield* Compiler.compile(source);
       // Block becomes Effect.gen with yield* for each !
-      expect(result.code).toContain("Effect.gen(function*()")
-      expect(result.code).toContain("yield*")
-      expect(result.code).toContain("return raw")
-    })
-  )
-})
+      expect(result.code).toContain("Effect.gen(function*()");
+      expect(result.code).toContain("yield*");
+      expect(result.code).toContain("return raw");
+    }),
+  );
+});
 ```
 
 - [ ] **Step 2: Run tests — verify fail**
@@ -330,6 +345,7 @@ userData = !{
 - [ ] **Step 3: Implement block parsing**
 
 In Parser, `parseBlock`:
+
 - Consume `{`
 - Parse statements until the last expression before `}`
 - The tricky part: distinguish "last expression" from "statement". Approach: parse as statements, then check if the last one is an ExprStatement — if so, extract its expr as the block's return value.
@@ -345,6 +361,7 @@ In `checkStmt` / `classifyExpr`: when encountering a Block, push a new scope (cr
 - [ ] **Step 5: Add block emission to Codegen**
 
 `Match.tag("Block", ...)` — optimize based on body:
+
 - Zero statements → emit the expression directly (no `Effect.gen`)
 - Has statements, no `!` → `Effect.gen(function*() { stmts; return expr })`
 - Has `!` → `Effect.gen(function*() { stmts with yield*; return expr })`
@@ -367,6 +384,7 @@ git commit --no-verify -m "feat(core): block expressions with scoped bindings"
 ## Task 4: Lambda Expressions
 
 **Files:**
+
 - Modify: `packages/core/src/Parser.ts`
 - Modify: `packages/core/src/Checker.ts`
 - Modify: `packages/core/src/Codegen.ts`
@@ -375,56 +393,57 @@ git commit --no-verify -m "feat(core): block expressions with scoped bindings"
 - [ ] **Step 1: Write failing lambda tests**
 
 `packages/core/test/Lambda.test.ts`:
+
 ```typescript
-import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { Compiler } from "@bang/core"
+import { describe, expect, it } from "@effect/vitest";
+import { Effect } from "effect";
+import { Compiler } from "@bang/core";
 
 describe("Lambdas", () => {
   it.effect("compiles single-expr lambda as plain function", () =>
-    Effect.gen(function*() {
-      const result = yield* Compiler.compile("double = x -> { x * 2 }")
-      expect(result.code).toContain("const double = (x) => x * 2")
-      expect(result.code).not.toContain("Effect.gen")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile("double = x -> { x * 2 }");
+      expect(result.code).toContain("const double = (x) => x * 2");
+      expect(result.code).not.toContain("Effect.gen");
+    }),
+  );
 
   it.effect("compiles multi-param lambda as curried plain function", () =>
-    Effect.gen(function*() {
-      const result = yield* Compiler.compile("add = a b -> { a + b }")
-      expect(result.code).toContain("const add = (a) => (b) => a + b")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile("add = a b -> { a + b }");
+      expect(result.code).toContain("const add = (a) => (b) => a + b");
+    }),
+  );
 
   it.effect("compiles lambda with statements using Effect.gen", () =>
-    Effect.gen(function*() {
-      const result = yield* Compiler.compile("process = x -> { y = x * 2; y + 1 }")
-      expect(result.code).toContain("Effect.gen(function*()")
-      expect(result.code).toContain("const y = x * 2")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile("process = x -> { y = x * 2; y + 1 }");
+      expect(result.code).toContain("Effect.gen(function*()");
+      expect(result.code).toContain("const y = x * 2");
+    }),
+  );
 
   it.effect("partial application", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const source = `add = a b -> { a + b }
-addThree = add 3`
-      const result = yield* Compiler.compile(source)
-      expect(result.code).toContain("const addThree = add(3)")
-    })
-  )
+addThree = add 3`;
+      const result = yield* Compiler.compile(source);
+      expect(result.code).toContain("const addThree = add(3)");
+    }),
+  );
 
   it.effect("lambda used with full application", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const source = `declare console.log : String -> Effect Unit { stdout } {}
 add = a b -> { a + b }
 result = add 3 4
-!console.log "done"`
-      const result = yield* Compiler.compile(source)
-      expect(result.code).toContain("const add =")
-      expect(result.code).toContain("const result = add(3)(4)")
-    })
-  )
-})
+!console.log "done"`;
+      const result = yield* Compiler.compile(source);
+      expect(result.code).toContain("const add =");
+      expect(result.code).toContain("const result = add(3)(4)");
+    }),
+  );
+});
 ```
 
 - [ ] **Step 2: Run tests — verify fail**
@@ -432,6 +451,7 @@ result = add 3 4
 - [ ] **Step 3: Implement lambda parsing**
 
 Haskell-style bare params: `a b -> { body }`. The parser detects lambdas by scanning ahead for `->`:
+
 - In expression position, if we see a sequence of `Ident` tokens followed by `Operator("->")`, it's a lambda.
 - Collect param names, consume `->`, parse body (Block).
 - Return `new Ast.Lambda({ params: ["a", "b"], body: blockExpr, span })`
@@ -446,38 +466,47 @@ Create a scope with param names bound as signal-typed identifiers. Check the bod
 All lambdas emit as curried. The codegen optimizes based on body complexity:
 
 **Single-expression body (no statements)** — emit as plain function:
+
 ```bang
 double = x -> { x * 2 }
 add = a b -> { a + b }
 ```
+
 ```typescript
-const double = (x) => x * 2
-const add = (a) => (b) => a + b
+const double = (x) => x * 2;
+const add = (a) => (b) => a + b;
 ```
 
 **Body with statements but no effects** — emit with `Effect.gen`:
+
 ```bang
 process = x -> { y = x * 2; y + 1 }
 ```
+
 ```typescript
-const process = (x) => Effect.gen(function*() {
-  const y = x * 2
-  return y + 1
-})
+const process = (x) =>
+  Effect.gen(function* () {
+    const y = x * 2;
+    return y + 1;
+  });
 ```
 
 **Body with effects (`!`)** — emit with `Effect.gen` and `yield*`:
+
 ```bang
 fetch = url -> { data = !Http.get url; data }
 ```
+
 ```typescript
-const fetch = (url) => Effect.gen(function*() {
-  const data = yield* Http_get(url)
-  return data
-})
+const fetch = (url) =>
+  Effect.gen(function* () {
+    const data = yield* Http_get(url);
+    return data;
+  });
 ```
 
 **Same optimization applies to blocks:**
+
 ```bang
 result = { 1 + 2 }           -- single expr → 1 + 2 (no Effect.gen)
 result = { x = 1; x + 2 }    -- has statements → Effect.gen
@@ -505,6 +534,7 @@ git commit --no-verify -m "feat(core): lambda expressions with curried multi-par
 ## Task 5: String Interpolation
 
 **Files:**
+
 - Modify: `packages/core/src/Token.ts`
 - Modify: `packages/core/src/Lexer.ts`
 - Modify: `packages/core/src/Parser.ts`
@@ -515,33 +545,34 @@ git commit --no-verify -m "feat(core): lambda expressions with curried multi-par
 - [ ] **Step 1: Write failing interpolation tests**
 
 `packages/core/test/Interp.test.ts`:
+
 ```typescript
-import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { Compiler } from "@bang/core"
+import { describe, expect, it } from "@effect/vitest";
+import { Effect } from "effect";
+import { Compiler } from "@bang/core";
 
 describe("String Interpolation", () => {
   it.effect("compiles simple interpolation", () =>
-    Effect.gen(function*() {
-      const result = yield* Compiler.compile('x = "hello ${name}"')
-      expect(result.code).toContain("`hello ${name}`")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile('x = "hello ${name}"');
+      expect(result.code).toContain("`hello ${name}`");
+    }),
+  );
 
   it.effect("compiles escape sequences", () =>
-    Effect.gen(function*() {
-      const result = yield* Compiler.compile('x = "line1\\nline2"')
-      expect(result.code).toContain("line1\\nline2")
-    })
-  )
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile('x = "line1\\nline2"');
+      expect(result.code).toContain("line1\\nline2");
+    }),
+  );
 
   it.effect("compiles nested expression in interpolation", () =>
-    Effect.gen(function*() {
-      const result = yield* Compiler.compile('x = "result: ${1 + 2}"')
-      expect(result.code).toContain("`result: ${1 + 2}`")
-    })
-  )
-})
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile('x = "result: ${1 + 2}"');
+      expect(result.code).toContain("`result: ${1 + 2}`");
+    }),
+  );
+});
 ```
 
 - [ ] **Step 2: Run tests — verify fail**
@@ -569,6 +600,7 @@ Validate each expression part in the interpolation has scope.
 - [ ] **Step 5: Add interpolation emission to Codegen**
 
 `StringInterp` emits as a JS template literal:
+
 - Text parts → literal text
 - Expr parts → `${emitExpr(expr)}`
 - Wrap in backticks instead of quotes
@@ -593,6 +625,7 @@ git commit --no-verify -m "feat(core): string interpolation with escape sequence
 ## Task 6: Float Literals in Expressions
 
 **Files:**
+
 - Modify: `packages/core/src/Parser.ts`
 - Modify: `packages/core/src/Ast.ts`
 - Modify: `packages/core/src/Checker.ts`
@@ -601,6 +634,7 @@ git commit --no-verify -m "feat(core): string interpolation with escape sequence
 - [ ] **Step 1: Add FloatLiteral AST node and handle in parser/checker/codegen**
 
 The lexer already produces `FloatLit` tokens but the parser doesn't handle them. Add:
+
 - `FloatLiteral` Schema.TaggedClass in Ast.ts
 - `Match.tag("FloatLit", ...)` in parsePrimary
 - `Match.tag("FloatLiteral", ...)` in classifyExpr, validateExprScope, emitExpr
@@ -623,11 +657,13 @@ git commit --no-verify -m "feat(core): float literal support in expressions"
 ## Task 7: Grouped Expressions (Parentheses)
 
 **Files:**
+
 - Modify: `packages/core/src/Parser.ts`
 
 - [ ] **Step 1: Handle `(expr)` grouping in parsePrimary**
 
 When the parser sees `(` and it's not a lambda (no `->` after `)`) and not Unit (`()`), parse as grouped expression:
+
 - Consume `(`
 - Parse expression
 - Consume `)`
@@ -649,13 +685,14 @@ git commit --no-verify -m "feat(core): parenthesized expression grouping"
 ## Task 8: End-to-End v0.2 Test
 
 **Files:**
+
 - Modify: `packages/core/test/Compiler.test.ts`
 
 - [ ] **Step 1: Add v0.2 target program test**
 
 ```typescript
 it.effect("compiles the v0.2 target program", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const source = `declare console.log : String -> Effect Unit { stdout } {}
 
 add = (a, b) -> { a + b }
@@ -667,15 +704,15 @@ result = {
   x + y
 }
 
-!console.log "result: ${result}"`
-    const result = yield* Compiler.compile(source)
-    expect(result.code).toContain("const add =")
-    expect(result.code).toContain("const double =")
-    expect(result.code).toContain("Effect.gen(function*()")
-    expect(result.code).toContain("return x + y")
-    expect(result.code).toContain("Effect.runPromise")
-  })
-)
+!console.log "result: ${result}"`;
+    const result = yield* Compiler.compile(source);
+    expect(result.code).toContain("const add =");
+    expect(result.code).toContain("const double =");
+    expect(result.code).toContain("Effect.gen(function*()");
+    expect(result.code).toContain("return x + y");
+    expect(result.code).toContain("Effect.runPromise");
+  }),
+);
 ```
 
 - [ ] **Step 2: Run all tests**
@@ -696,15 +733,15 @@ git commit --no-verify -m "test: add v0.2 end-to-end target program test"
 
 ## Summary
 
-| Task | What it delivers | Dependencies |
-|------|-----------------|-------------|
-| 1 | AST nodes | None |
-| 2 | Binary/unary operators + Pratt parser | Task 1 |
-| 3 | Block expressions | Tasks 1, 2 |
-| 4 | Lambda expressions | Tasks 1, 2, 3 |
-| 5 | String interpolation | Task 1 |
-| 6 | Float literals | Task 1 |
-| 7 | Grouped expressions | Task 2 |
-| 8 | E2E test | All above |
+| Task | What it delivers                      | Dependencies  |
+| ---- | ------------------------------------- | ------------- |
+| 1    | AST nodes                             | None          |
+| 2    | Binary/unary operators + Pratt parser | Task 1        |
+| 3    | Block expressions                     | Tasks 1, 2    |
+| 4    | Lambda expressions                    | Tasks 1, 2, 3 |
+| 5    | String interpolation                  | Task 1        |
+| 6    | Float literals                        | Task 1        |
+| 7    | Grouped expressions                   | Task 2        |
+| 8    | E2E test                              | All above     |
 
 Tasks 5, 6, 7 are independent of each other and can run in parallel after Task 2.

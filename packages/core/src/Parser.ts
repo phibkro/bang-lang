@@ -249,12 +249,21 @@ const PREC_APP = 11;
 
 const BINARY_PREC: Record<string, number> = {
   "<-": PREC_MUT,
-  "xor": PREC_XOR,
-  "or": PREC_OR,
-  "and": PREC_AND,
-  "==": PREC_CMP, "!=": PREC_CMP, "<": PREC_CMP, ">": PREC_CMP, "<=": PREC_CMP, ">=": PREC_CMP,
-  "+": PREC_ADD, "-": PREC_ADD, "++": PREC_ADD,
-  "*": PREC_MUL, "/": PREC_MUL, "%": PREC_MUL,
+  xor: PREC_XOR,
+  or: PREC_OR,
+  and: PREC_AND,
+  "==": PREC_CMP,
+  "!=": PREC_CMP,
+  "<": PREC_CMP,
+  ">": PREC_CMP,
+  "<=": PREC_CMP,
+  ">=": PREC_CMP,
+  "+": PREC_ADD,
+  "-": PREC_ADD,
+  "++": PREC_ADD,
+  "*": PREC_MUL,
+  "/": PREC_MUL,
+  "%": PREC_MUL,
 };
 
 const RIGHT_ASSOC = new Set(["<-"]);
@@ -609,10 +618,7 @@ const parseBlock = (s: ParseState): P<Ast.Block> =>
     const [endTok, s3] = yield* expect(s2, "Delimiter", "}");
     const span = Span.merge(tokenSpan(startTok), tokenSpan(endTok));
 
-    return [
-      new Ast.Block({ statements: [...stmts], expr, span }),
-      s3,
-    ] as const;
+    return [new Ast.Block({ statements: [...stmts], expr, span }), s3] as const;
   });
 
 const parseBlockItem = (s: ParseState): P<Ast.Stmt> =>

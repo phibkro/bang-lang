@@ -126,6 +126,33 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       }),
     ),
     Match.tag("Force", (e) => classifyExpr(e.expr, scope)),
+    Match.tag("FloatLiteral", () => "signal" as const),
+    Match.tag("BinaryExpr", (e) => {
+      const l = classifyExpr(e.left, scope);
+      const r = classifyExpr(e.right, scope);
+      return l === "effect" || r === "effect" ? ("effect" as const) : ("signal" as const);
+    }),
+    Match.tag("UnaryExpr", (e) => classifyExpr(e.expr, scope)),
+    Match.tag("Block", (e) => {
+      const blockScope = buildScope(e.statements, scope);
+      const stmtHasEffect = e.statements.some(
+        (s) =>
+          s._tag === "ForceStatement" ||
+          (s._tag === "Declaration" && classifyExpr(s.value, blockScope) === "effect"),
+      );
+      const exprClass = classifyExpr(e.expr, blockScope);
+      return stmtHasEffect || exprClass === "effect" ? ("effect" as const) : ("signal" as const);
+    }),
+    Match.tag("Lambda", (e) => {
+      // Create child scope with params bound as signal-typed
+      const paramScope = Arr.reduce(e.params, scope, (acc, p) =>
+        HashMap.set(acc, p, { name: p, type: Option.none(), effectClass: "signal" as const }),
+      );
+      // Lambda itself is always signal (it's a value); classify body for internal use
+      classifyExpr(e.body, paramScope);
+      return "signal" as const;
+    }),
+    Match.tag("StringInterp", () => "signal" as const),
     Match.exhaustive,
   );
 
@@ -161,8 +188,35 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     Match.tag("Force", (e) => validateExprScope(e.expr, scope)),
     Match.tag("StringLiteral", () => Effect.void),
     Match.tag("IntLiteral", () => Effect.void),
+    Match.tag("FloatLiteral", () => Effect.void),
     Match.tag("BoolLiteral", () => Effect.void),
     Match.tag("UnitLiteral", () => Effect.void),
+    Match.tag("BinaryExpr", (e) =>
+      Effect.flatMap(validateExprScope(e.left, scope), () => validateExprScope(e.right, scope)),
+    ),
+    Match.tag("UnaryExpr", (e) => validateExprScope(e.expr, scope)),
+    Match.tag("Block", (e) =>
+      Effect.gen(function* () {
+        const blockScope = buildScope(e.statements, scope);
+        yield* Effect.forEach(e.statements, (stmt) => checkStmt(stmt, blockScope), {
+          discard: true,
+        });
+        yield* validateExprScope(e.expr, blockScope);
+      }),
+    ),
+    Match.tag("Lambda", (e) => {
+      const paramScope = Arr.reduce(e.params, scope, (acc, p) =>
+        HashMap.set(acc, p, { name: p, type: Option.none(), effectClass: "signal" as const }),
+      );
+      return validateExprScope(e.body, paramScope);
+    }),
+    Match.tag("StringInterp", (e) =>
+      Effect.forEach(
+        e.parts,
+        (part) => (part._tag === "InterpExpr" ? validateExprScope(part.value, scope) : Effect.void),
+        { discard: true },
+      ),
+    ),
     Match.exhaustive,
   );
 

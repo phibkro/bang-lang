@@ -36,7 +36,22 @@ export type Type = ConcreteType | ArrowType | EffectType;
 
 // Forward-declare recursive Expr schema
 const ExprSchema: Schema.Schema<Expr> = Schema.suspend(() =>
-  Schema.Union(Ident, DotAccess, App, StringLiteral, IntLiteral, FloatLiteral, BoolLiteral, UnitLiteral, Force, Block, Lambda, BinaryExpr, UnaryExpr, StringInterp),
+  Schema.Union(
+    Ident,
+    DotAccess,
+    App,
+    StringLiteral,
+    IntLiteral,
+    FloatLiteral,
+    BoolLiteral,
+    UnitLiteral,
+    Force,
+    Block,
+    Lambda,
+    BinaryExpr,
+    UnaryExpr,
+    StringInterp,
+  ),
 );
 
 export class Ident extends Schema.TaggedClass<Ident>()("Ident", {
@@ -146,7 +161,9 @@ export type Expr =
 // Statement nodes
 // ---------------------------------------------------------------------------
 
-const StmtSchema = Schema.suspend(() => Schema.Union(Declaration, Declare, ForceStatement, ExprStatement));
+const StmtSchema = Schema.suspend(() =>
+  Schema.Union(Declaration, Declare, ForceStatement, ExprStatement),
+);
 
 export class Program extends Schema.TaggedClass<Program>()("Program", {
   statements: Schema.Array(Schema.suspend(() => StmtSchema)),

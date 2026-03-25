@@ -78,28 +78,48 @@ const toWrapperName = (name: string): string => name.replace(/\./g, "_");
 
 const mapBinaryOp = (op: string): string => {
   switch (op) {
-    case "==": return "===";
-    case "!=": return "!==";
-    case "and": return "&&";
-    case "or": return "||";
-    case "xor": return "!==";
-    case "++": return "+";
-    default: return op;
+    case "==":
+      return "===";
+    case "!=":
+      return "!==";
+    case "and":
+      return "&&";
+    case "or":
+      return "||";
+    case "xor":
+      return "!==";
+    case "++":
+      return "+";
+    default:
+      return op;
   }
 };
 
 // JavaScript operator precedence for binary operators (higher = tighter binding)
 const JS_PREC: Record<string, number> = {
-  "||": 4, "&&": 5, "!==": 7, "===": 8, "<": 9, ">": 9, "<=": 9, ">=": 9,
-  "+": 12, "-": 12, "*": 14, "/": 14, "%": 14,
+  "||": 4,
+  "&&": 5,
+  "!==": 7,
+  "===": 8,
+  "<": 9,
+  ">": 9,
+  "<=": 9,
+  ">=": 9,
+  "+": 12,
+  "-": 12,
+  "*": 14,
+  "/": 14,
+  "%": 14,
 };
 
 const jsPrecOf = (jsOp: string): number => JS_PREC[jsOp] ?? 0;
 
 const mapUnaryOp = (op: string): string => {
   switch (op) {
-    case "not": return "!";
-    default: return op;
+    case "not":
+      return "!";
+    default:
+      return op;
   }
 };
 
@@ -154,9 +174,7 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
       const funcCode = emitExpr(e.func, decls);
       // Check if the function is a declared wrapper (use comma-separated args)
       const dottedName = buildDottedName(e.func);
-      const isDeclared = Option.isSome(
-        Option.flatMap(dottedName, (n) => HashMap.get(decls, n)),
-      );
+      const isDeclared = Option.isSome(Option.flatMap(dottedName, (n) => HashMap.get(decls, n)));
       if (isDeclared) {
         const args = Arr.map(e.args, (a) => emitExpr(a, decls)).join(", ");
         return `${funcCode}(${args})`;
