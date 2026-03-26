@@ -119,6 +119,7 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
       );
       return Doc.hcat([Doc.text('"'), ...parts, Doc.text('"')]);
     }),
+    Match.tag("MatchExpr", () => Doc.text("match { ... }")),
     Match.exhaustive,
   );
 
@@ -177,6 +178,35 @@ const formatTopLevelStmt = (stmt: Ast.Stmt): Doc.Doc<never> =>
     ),
     Match.tag("ForceStatement", (s) => formatExpr(s.expr)),
     Match.tag("ExprStatement", (s) => formatExpr(s.expr)),
+    Match.tag("TypeDecl", (s) => {
+      const params = s.typeParams.length > 0 ? " " + s.typeParams.join(" ") : "";
+      const ctors = s.constructors.map((ctor) =>
+        Match.value(ctor).pipe(
+          Match.tag("NullaryConstructor", (c) => Doc.text(c.tag)),
+          Match.tag("PositionalConstructor", (c) => {
+            const fields = c.fields.map((f) => formatType(f));
+            return Doc.hsep([Doc.text(c.tag), ...fields]);
+          }),
+          Match.tag("NamedConstructor", (c) => {
+            const fields = c.fields.map((f) =>
+              Doc.hcat([Doc.text(f.name), Doc.text(" : "), formatType(f.type)]),
+            );
+            const inner = fields.reduce((a, b) => Doc.hcat([a, Doc.text(", "), b]));
+            return Doc.hcat([Doc.text(c.tag), Doc.text(" { "), inner, Doc.text(" }")]);
+          }),
+          Match.exhaustive,
+        ),
+      );
+      const ctorDoc = ctors.reduce((a, b) => Doc.hcat([a, Doc.text(" | "), b]));
+      return Doc.hcat([Doc.text(`type ${s.name}${params} = `), ctorDoc]);
+    }),
+    Match.tag("Mutation", (s) =>
+      Doc.hcat([Doc.text(s.target), Doc.text(" <- "), formatExpr(s.value)]),
+    ),
+    Match.tag("Import", (s) =>
+      Doc.text(`import ${s.modulePath.join(".")}.{${s.names.join(", ")}}`),
+    ),
+    Match.tag("Export", (s) => Doc.text(`export {${s.names.join(", ")}}`)),
     Match.exhaustive,
   );
 

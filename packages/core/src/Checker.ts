@@ -89,6 +89,21 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
           effectClass: classifyExpr(s.value, acc),
         }),
       ),
+      Match.tag("TypeDecl", (s) =>
+        Arr.reduce(s.constructors, acc, (scope, ctor) => {
+          const ctorTag =
+            ctor._tag === "NullaryConstructor"
+              ? ctor.tag
+              : ctor._tag === "PositionalConstructor"
+                ? ctor.tag
+                : ctor.tag;
+          return HashMap.set(scope, ctorTag, {
+            name: ctorTag,
+            type: Option.none(),
+            effectClass: "signal" as const,
+          });
+        }),
+      ),
       Match.orElse(() => acc),
     ),
   );
@@ -153,6 +168,7 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       return "signal" as const;
     }),
     Match.tag("StringInterp", () => "signal" as const),
+    Match.tag("MatchExpr", () => "signal" as const),
     Match.exhaustive,
   );
 
@@ -216,6 +232,14 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
         (part) => (part._tag === "InterpExpr" ? validateExprScope(part.value, scope) : Effect.void),
         { discard: true },
       ),
+    ),
+    Match.tag("MatchExpr", (e) =>
+      Effect.gen(function* () {
+        yield* validateExprScope(e.scrutinee, scope);
+        for (const arm of e.arms) {
+          yield* validateExprScope(arm.body, scope);
+        }
+      }),
     ),
     Match.exhaustive,
   );
@@ -284,6 +308,18 @@ const checkStmt = (
         }
         return annotate(s, { type: unknownType, effectClass: "signal" as const });
       }),
+    ),
+    Match.tag("TypeDecl", (s) =>
+      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+    ),
+    Match.tag("Mutation", (s) =>
+      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+    ),
+    Match.tag("Import", (s) =>
+      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+    ),
+    Match.tag("Export", (s) =>
+      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
     ),
     Match.exhaustive,
   );

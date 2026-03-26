@@ -1,12 +1,25 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Lexer, Parser } from "@bang/core";
+import { Compiler, Interpreter, Lexer, Parser, Value } from "@bang/core";
 import type * as Ast from "@bang/core/Ast";
 
 const parse = (source: string) =>
   Effect.gen(function* () {
     const tokens = yield* Lexer.tokenize(source);
     return yield* Parser.parse(tokens);
+  });
+
+const evalSource = (source: string) =>
+  Effect.gen(function* () {
+    const tokens = yield* Lexer.tokenize(source);
+    const ast = yield* Parser.parse(tokens);
+    return yield* Interpreter.evalProgram(ast);
+  });
+
+const compileSource = (source: string) =>
+  Effect.gen(function* () {
+    const result = yield* Compiler.compile(source);
+    return result.code;
   });
 
 describe("TypeDecl", () => {
@@ -81,6 +94,40 @@ describe("TypeDecl", () => {
       expect(ast.statements[1]._tag).toBe("Declaration");
       const decl = ast.statements[1] as Ast.Declaration;
       expect(decl.name).toBe("x");
+    }),
+  );
+
+  // -----------------------------------------------------------------------
+  // Interpreter tests
+  // -----------------------------------------------------------------------
+
+  it.effect("interpreter: nullary constructor produces Tagged value", () =>
+    Effect.gen(function* () {
+      const result = yield* evalSource("type Bool = True | False\nx = True");
+      expect(result._tag).toBe("Tagged");
+      expect((result as { tag: string }).tag).toBe("True");
+      expect((result as { fields: readonly unknown[] }).fields).toEqual([]);
+    }),
+  );
+
+  it.effect("interpreter: positional constructor applies to produce Tagged", () =>
+    Effect.gen(function* () {
+      const result = yield* evalSource("type Maybe a = Some a | None\nx = Some 42");
+      expect(result._tag).toBe("Tagged");
+      expect((result as { tag: string }).tag).toBe("Some");
+      expect((result as { fields: readonly unknown[] }).fields).toEqual([Value.Num({ value: 42 })]);
+    }),
+  );
+
+  // -----------------------------------------------------------------------
+  // Codegen tests
+  // -----------------------------------------------------------------------
+
+  it.effect("codegen: emits Data.tagged for type declarations", () =>
+    Effect.gen(function* () {
+      const code = yield* compileSource("type Bool = True | False");
+      expect(code).toContain("Data.tagged");
+      expect(code).toContain('import { Data } from "effect"');
     }),
   );
 });

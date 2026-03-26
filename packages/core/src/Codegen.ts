@@ -163,6 +163,10 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap): string =>
     ),
     Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls)),
     Match.tag("Declare", () => ""),
+    Match.tag("TypeDecl", () => ""),
+    Match.tag("Mutation", () => ""),
+    Match.tag("Import", () => ""),
+    Match.tag("Export", () => ""),
     Match.exhaustive,
   );
 
@@ -244,6 +248,7 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
         .join("");
       return `\`${inner}\``;
     }),
+    Match.tag("MatchExpr", () => `/* match not yet codegen'd */`),
     Match.exhaustive,
   );
 
@@ -269,6 +274,28 @@ const emitStatement = (w: WriterState, stmt: TypedAst.TypedStmt, decls: DeclMap)
       return writeLine(w1, emitExpr(node.expr, decls));
     }),
     Match.tag("Declare", () => w), // already handled in wrapper generation
+    Match.tag("TypeDecl", (node) => {
+      const w1 = recordMapping(w, node.span);
+      const lines = node.constructors.map((ctor) =>
+        Match.value(ctor).pipe(
+          Match.tag("NullaryConstructor", (c) => `const ${c.tag} = Data.tagged("${c.tag}")({})`),
+          Match.tag("PositionalConstructor", (c) => {
+            const params = c.fields.map((_, i) => `_${i}`);
+            const fields = params.map((p) => `${p}`).join(", ");
+            return `const ${c.tag} = (${params.join(", ")}) => Data.tagged("${c.tag}")({ ${fields} })`;
+          }),
+          Match.tag("NamedConstructor", (c) => {
+            const fields = c.fields.map((f) => f.name);
+            return `const ${c.tag} = ({ ${fields.join(", ")} }) => Data.tagged("${c.tag}")({ ${fields.join(", ")} })`;
+          }),
+          Match.exhaustive,
+        ),
+      );
+      return lines.reduce((acc, line) => writeLine(acc, line), w1);
+    }),
+    Match.tag("Mutation", () => w),
+    Match.tag("Import", () => w),
+    Match.tag("Export", () => w),
     Match.exhaustive,
   );
 
@@ -279,12 +306,18 @@ const emitStatement = (w: WriterState, stmt: TypedAst.TypedStmt, decls: DeclMap)
 const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const decls = collectDeclaredNames(program.statements);
   const hasForce = Arr.some(program.statements, (s) => s.node._tag === "ForceStatement");
+  const hasTypeDecl = Arr.some(program.statements, (s) => s.node._tag === "TypeDecl");
   const needsEffectImport = HashMap.size(decls) > 0 || hasForce;
+  const needsDataImport = hasTypeDecl;
 
   // Start building output
-  const w0 = needsEffectImport
-    ? writeBlankLine(writeLine(emptyWriter, 'import { Effect } from "effect"'))
-    : emptyWriter;
+  const imports: string[] = [];
+  if (needsEffectImport) imports.push("Effect");
+  if (needsDataImport) imports.push("Data");
+  const w0 =
+    imports.length > 0
+      ? writeBlankLine(writeLine(emptyWriter, `import { ${imports.join(", ")} } from "effect"`))
+      : emptyWriter;
 
   // Emit declare wrappers
   const w1 = Arr.reduce(program.statements, w0, (w, stmt) =>

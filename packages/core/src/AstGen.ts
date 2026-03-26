@@ -102,6 +102,21 @@ export const genExpr = (depth: number): fc.Arbitrary<Ast.Expr> =>
       );
 
 // ---------------------------------------------------------------------------
+// TypeDecl generator (simple nullary ADTs)
+// ---------------------------------------------------------------------------
+
+const genNullaryConstructor = fc
+  .constantFrom("True", "False", "None", "Red", "Green", "Blue")
+  .map((tag) => new Ast.NullaryConstructor({ tag, span: s }));
+
+export const genTypeDecl = fc
+  .tuple(
+    fc.constantFrom("Bool", "Color", "Status"),
+    fc.array(genNullaryConstructor, { minLength: 1, maxLength: 4 }),
+  )
+  .map(([name, ctors]) => new Ast.TypeDecl({ name, typeParams: [], constructors: ctors, span: s }));
+
+// ---------------------------------------------------------------------------
 // Program generator
 // ---------------------------------------------------------------------------
 
