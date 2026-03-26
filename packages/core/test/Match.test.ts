@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Lexer, Parser } from "@bang/core";
+import { Interpreter, Lexer, Parser, Value } from "@bang/core";
 
 describe("Match parsing", () => {
   const parseSource = (src: string) =>
@@ -105,6 +105,66 @@ describe("Match parsing", () => {
           expect(m.arms[0].pattern.patterns[0]._tag).toBe("BindingPattern");
         }
       }
+    }),
+  );
+});
+
+describe("Match interpreter", () => {
+  const parseSource = (src: string) =>
+    Effect.gen(function* () {
+      const tokens = yield* Lexer.tokenize(src);
+      return yield* Parser.parse(tokens);
+    });
+
+  it.effect("matches wildcard", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource('x = match 42 { _ -> "any" }');
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Str({ value: "any" }));
+    }),
+  );
+
+  it.effect("matches literal", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource('x = match 42 { 42 -> "yes", _ -> "no" }');
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Str({ value: "yes" }));
+    }),
+  );
+
+  it.effect("matches constructor and binds field", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource(
+        "type Maybe a = Some a | None\nx = match (Some 10) { Some v -> v, None -> 0 }",
+      );
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Num({ value: 10 }));
+    }),
+  );
+
+  it.effect("matches binding pattern", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource("x = match 42 { n -> n + 1 }");
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Num({ value: 43 }));
+    }),
+  );
+
+  it.effect("falls through to second arm", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource(
+        "type Maybe a = Some a | None\nx = match None { Some v -> v, None -> 99 }",
+      );
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Num({ value: 99 }));
+    }),
+  );
+
+  it.effect("fails on no matching arm", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource('x = match 42 { 0 -> "zero" }');
+      const result = yield* Effect.either(Interpreter.evalProgram(ast));
+      expect(result._tag).toBe("Left");
     }),
   );
 });
