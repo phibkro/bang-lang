@@ -1,6 +1,6 @@
 import { Effect, HashMap, Match, Option } from "effect";
 import type * as Ast from "./Ast.js";
-import { Num, Str, Bool, Unit, EvalError, type Value } from "./Value.js";
+import { Num, Str, Bool, Unit, Closure, EvalError, type Value } from "./Value.js";
 
 type Env = HashMap.HashMap<string, Value>;
 
@@ -52,30 +52,36 @@ export const evalExpr = (
         }),
       ),
     ),
-    // Stubs for Task 3:
-    Match.tag("Block", () =>
-      Effect.fail(
-        new EvalError({
-          message: "Not yet implemented: Block",
-          span: expr.span,
-        }),
-      ),
+    Match.tag("Block", (e) =>
+      Effect.gen(function* () {
+        let blockEnv = env;
+        for (const stmt of e.statements) {
+          blockEnv = yield* evalStmt(stmt, blockEnv);
+        }
+        return yield* evalExpr(e.expr, blockEnv);
+      }),
     ),
-    Match.tag("Lambda", () =>
-      Effect.fail(
-        new EvalError({
-          message: "Not yet implemented: Lambda",
-          span: expr.span,
-        }),
-      ),
+    Match.tag("Lambda", (e) =>
+      Effect.succeed(Closure({ params: [...e.params], body: e.body, env })),
     ),
-    Match.tag("App", () =>
-      Effect.fail(
-        new EvalError({
-          message: "Not yet implemented: App",
-          span: expr.span,
-        }),
-      ),
+    Match.tag("App", (e) =>
+      Effect.gen(function* () {
+        const func = yield* evalExpr(e.func, env);
+        if (func._tag !== "Closure")
+          return yield* Effect.fail(
+            new EvalError({
+              message: "Cannot apply non-function",
+              span: e.span,
+            }),
+          );
+
+        const args: Value[] = [];
+        for (const arg of e.args) {
+          args.push(yield* evalExpr(arg, env));
+        }
+
+        return yield* applyClosure(func, args, e.span);
+      }),
     ),
     Match.tag("StringInterp", () =>
       Effect.fail(
@@ -87,6 +93,70 @@ export const evalExpr = (
     ),
     Match.exhaustive,
   );
+
+const evalStmt = (
+  stmt: Ast.Stmt,
+  env: Env,
+): Effect.Effect<Env, EvalError> =>
+  Match.value(stmt).pipe(
+    Match.tag("Declaration", (s) =>
+      Effect.gen(function* () {
+        const value = yield* evalExpr(s.value, env);
+        return HashMap.set(env, s.name, value);
+      }),
+    ),
+    Match.tag("Declare", () => Effect.succeed(env)),
+    Match.tag("ForceStatement", (s) =>
+      Effect.gen(function* () {
+        yield* evalExpr(s.expr, env);
+        return env;
+      }),
+    ),
+    Match.tag("ExprStatement", (s) =>
+      Effect.gen(function* () {
+        yield* evalExpr(s.expr, env);
+        return env;
+      }),
+    ),
+    Match.exhaustive,
+  );
+
+const applyClosure = (
+  closure: Extract<Value, { _tag: "Closure" }>,
+  args: Value[],
+  span: Ast.Span,
+): Effect.Effect<Value, EvalError> => {
+  const { params, body, env: closureEnv } = closure;
+
+  if (args.length < params.length) {
+    let newEnv = closureEnv;
+    for (let i = 0; i < args.length; i++) {
+      newEnv = HashMap.set(newEnv, params[i], args[i]);
+    }
+    return Effect.succeed(
+      Closure({
+        params: params.slice(args.length),
+        body,
+        env: newEnv,
+      }),
+    );
+  }
+
+  if (args.length === params.length) {
+    let newEnv = closureEnv;
+    for (let i = 0; i < args.length; i++) {
+      newEnv = HashMap.set(newEnv, params[i], args[i]);
+    }
+    return evalExpr(body, newEnv);
+  }
+
+  return Effect.fail(
+    new EvalError({
+      message: "Over-application not supported in v1",
+      span,
+    }),
+  );
+};
 
 const applyBinaryOp = (
   op: string,
