@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Compiler, Interpreter, Lexer, Parser, Value } from "@bang/core";
+import { Compiler, Formatter, Interpreter, Lexer, Parser, Value } from "@bang/core";
 
 // ---------------------------------------------------------------------------
 // Helper: parse + interpret a Bang program
@@ -82,9 +82,7 @@ describe("Correctness Properties", () => {
 
   it.effect("lambda application matches direct computation", () =>
     Effect.gen(function* () {
-      const viaLambda = yield* interpret(
-        "result = { add = a b -> { a + b }; add 3 4 }",
-      );
+      const viaLambda = yield* interpret("result = { add = a b -> { a + b }; add 3 4 }");
       const direct = yield* interpret("result = 3 + 4");
       expect(viaLambda).toEqual(direct);
     }),
@@ -105,9 +103,7 @@ describe("Correctness Properties", () => {
 
   it.effect("nested blocks scope correctly", () =>
     Effect.gen(function* () {
-      const result = yield* interpret(
-        "result = { x = { y = 1; y + 2 }; x * 3 }",
-      );
+      const result = yield* interpret("result = { x = { y = 1; y + 2 }; x * 3 }");
       expect(result).toEqual(Value.Num({ value: 9 }));
     }),
   );
@@ -118,10 +114,44 @@ describe("Correctness Properties", () => {
 
   it.effect("interpolation evaluates expressions", () =>
     Effect.gen(function* () {
-      const result = yield* interpret(
-        'result = { x = 42; "value: ${x}" }',
-      );
+      const result = yield* interpret('result = { x = 42; "value: ${x}" }');
       expect(result).toEqual(Value.Str({ value: "value: 42" }));
     }),
   );
+
+  // ---------------------------------------------------------------------------
+  // Roundtrip: format preserves semantics
+  // ---------------------------------------------------------------------------
+
+  it.effect("format preserves semantics", () =>
+    Effect.gen(function* () {
+      const source = "result = { x = 1 + 2 * 3; y = x; y }";
+      const formatted = yield* Formatter.formatSource(source);
+      const original = yield* interpret(source);
+      const roundtripped = yield* interpret(formatted);
+      expect(roundtripped).toEqual(original);
+    }),
+  );
+
+  const roundtripPrograms = [
+    "result = 42",
+    'result = "hello"',
+    "result = { x = 1; y = 2; x + y }",
+    "double = x -> { x * 2 }",
+    "add = a b -> { a + b }",
+    "result = -5",
+    "result = not true",
+    "result = 1 == 2",
+  ];
+
+  for (const source of roundtripPrograms) {
+    it.effect(`roundtrip preserves: ${source}`, () =>
+      Effect.gen(function* () {
+        const formatted = yield* Formatter.formatSource(source);
+        const original = yield* interpret(source);
+        const roundtripped = yield* interpret(formatted);
+        expect(roundtripped).toEqual(original);
+      }),
+    );
+  }
 });

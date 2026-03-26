@@ -141,4 +141,13 @@ describe("Formatter", () => {
       expect(result.trim()).toBe('result = "hello ${name}"');
     }),
   );
+
+  it.effect("formatting is idempotent", () =>
+    Effect.gen(function* () {
+      const source = "result = { x = 1 + 2 * 3; y = x; y }";
+      const once = yield* Formatter.formatSource(source);
+      const twice = yield* Formatter.formatSource(once);
+      expect(twice).toBe(once);
+    }),
+  );
 });
