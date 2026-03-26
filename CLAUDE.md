@@ -88,6 +88,24 @@ Language spec (what it means, in docs/language-spec.md)
 
 Don't add a feature to the compiler without adding it to the interpreter first. Get semantics right in the simpler system, then translate.
 
+## Adding a Language Feature
+
+Add the AST node first. `Match.exhaustive` breaks every downstream file — fix each one:
+
+```
+AST node (Schema.TaggedClass) → type errors everywhere
+  → Lexer (new tokens if needed)
+  → Parser (source → AST)
+  → Interpreter (ground truth semantics)
+  → Checker (scope/type rules)
+  → Codegen (compile to Effect TS)
+  → Formatter (canonical output)
+  → Property test: eval ≡ run(codegen)
+  → Property test: parse(format(x)) roundtrips
+```
+
+The AST is the type-level test. Match.exhaustive is the assertion. The spec says what each case does.
+
 ## Correctness
 
 Three layers, ordered by cost-effectiveness:
