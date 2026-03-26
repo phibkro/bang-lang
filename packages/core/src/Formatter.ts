@@ -237,9 +237,9 @@ const formatTopLevelStmt = (stmt: Ast.Stmt): Doc.Doc<never> =>
       Doc.hcat([Doc.text(s.target), Doc.text(" <- "), formatExpr(s.value)]),
     ),
     Match.tag("Import", (s) =>
-      Doc.text(`import ${s.modulePath.join(".")}.{${s.names.join(", ")}}`),
+      Doc.text(`from ${s.modulePath.join(".")} import { ${s.names.join(", ")} }`),
     ),
-    Match.tag("Export", (s) => Doc.text(`export {${s.names.join(", ")}}`)),
+    Match.tag("Export", (s) => Doc.text(`export { ${s.names.join(", ")} }`)),
     Match.exhaustive,
   );
 

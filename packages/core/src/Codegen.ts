@@ -172,8 +172,11 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap, mutNames: ReadonlySet<str
       "Mutation",
       (s) => `yield* Ref.set(${s.target}, ${emitExpr(s.value, decls, mutNames)})`,
     ),
-    Match.tag("Import", () => ""),
-    Match.tag("Export", () => ""),
+    Match.tag("Import", (s) => {
+      const path = s.modulePath.map((p) => p.toLowerCase()).join("/");
+      return `import { ${s.names.join(", ")} } from "./${path}"`;
+    }),
+    Match.tag("Export", (s) => `export { ${s.names.join(", ")} }`),
     Match.exhaustive,
   );
 
@@ -385,8 +388,15 @@ const emitStatement = (
         `yield* Ref.set(${node.target}, ${emitExpr(node.value, decls, mutNames)})`,
       );
     }),
-    Match.tag("Import", () => w),
-    Match.tag("Export", () => w),
+    Match.tag("Import", (node) => {
+      const w1 = recordMapping(w, node.span);
+      const path = node.modulePath.map((p) => p.toLowerCase()).join("/");
+      return writeLine(w1, `import { ${node.names.join(", ")} } from "./${path}"`);
+    }),
+    Match.tag("Export", (node) => {
+      const w1 = recordMapping(w, node.span);
+      return writeLine(w1, `export { ${node.names.join(", ")} }`);
+    }),
     Match.exhaustive,
   );
 
@@ -471,20 +481,32 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
     ),
   );
 
-  // Filter non-declare statements
-  const bodyStmts = Arr.filter(program.statements, (s) => s.node._tag !== "Declare");
+  // Emit user import statements at top level
+  const importStmts = Arr.filter(program.statements, (s) => s.node._tag === "Import");
+  const w1a = Arr.reduce(importStmts, w1, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
+
+  // Filter non-declare, non-import, non-export statements for body
+  const bodyStmts = Arr.filter(
+    program.statements,
+    (s) => s.node._tag !== "Declare" && s.node._tag !== "Import" && s.node._tag !== "Export",
+  );
+
+  // Collect export statements for emission after body
+  const exportStmts = Arr.filter(program.statements, (s) => s.node._tag === "Export");
 
   if (hasForce || hasMut) {
     // Wrap in Effect.gen + runPromise
-    const w2 = pushIndent(writeLine(w1, "const main = Effect.gen(function*() {"));
+    const w2 = pushIndent(writeLine(w1a, "const main = Effect.gen(function*() {"));
     const w3 = Arr.reduce(bodyStmts, w2, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
     const w4 = writeLine(popIndent(w3), "})");
     const w5 = writeLine(writeBlankLine(w4), "Effect.runPromise(main)");
-    return { code: writerToString(w5), sourceMap: w5.sourceMap };
+    const w6 = Arr.reduce(exportStmts, w5, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
+    return { code: writerToString(w6), sourceMap: w6.sourceMap };
   }
 
-  const w2 = Arr.reduce(bodyStmts, w1, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
-  return { code: writerToString(w2), sourceMap: w2.sourceMap };
+  const w2 = Arr.reduce(bodyStmts, w1a, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
+  const w3 = Arr.reduce(exportStmts, w2, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
+  return { code: writerToString(w3), sourceMap: w3.sourceMap };
 };
 
 // ---------------------------------------------------------------------------
