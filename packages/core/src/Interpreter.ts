@@ -244,18 +244,28 @@ const applyBinaryOp = (
                   : l >= r;
       return Effect.succeed(Bool({ value: result }));
     }
-    // For other types, only == and != make sense
-    if (op === "==")
-      return Effect.succeed(
-        Bool({ value: JSON.stringify(left) === JSON.stringify(right) }),
-      );
-    if (op === "!=")
-      return Effect.succeed(
-        Bool({ value: JSON.stringify(left) !== JSON.stringify(right) }),
-      );
+    // For Str: compare value directly
+    if (left._tag === "Str" && right._tag === "Str") {
+      if (op === "==") return Effect.succeed(Bool({ value: left.value === right.value }));
+      if (op === "!=") return Effect.succeed(Bool({ value: left.value !== right.value }));
+    }
+    // For Bool: compare value directly
+    if (left._tag === "Bool" && right._tag === "Bool") {
+      if (op === "==") return Effect.succeed(Bool({ value: left.value === right.value }));
+      if (op === "!=") return Effect.succeed(Bool({ value: left.value !== right.value }));
+    }
+    // For Unit: always equal
+    if (left._tag === "Unit" && right._tag === "Unit") {
+      if (op === "==") return Effect.succeed(Bool({ value: true }));
+      if (op === "!=") return Effect.succeed(Bool({ value: false }));
+    }
+    // Closures cannot be compared
+    if (left._tag === "Closure" || right._tag === "Closure") {
+      return Effect.fail(new EvalError({ message: "Cannot compare closures", span }));
+    }
     return Effect.fail(
       new EvalError({
-        message: `Operator ${op} only supported for numbers`,
+        message: `Operator ${op} not supported for ${left._tag}`,
         span,
       }),
     );
@@ -319,7 +329,7 @@ export const evalProgram = (
         env = HashMap.set(env, stmt.name, val);
         lastValue = val;
       } else if (stmt._tag === "Declare") {
-        // no-op
+        lastValue = Unit(); // declare is a no-op, returns Unit per spec
       } else if (stmt._tag === "ForceStatement") {
         lastValue = yield* evalExpr(stmt.expr, env);
       } else if (stmt._tag === "ExprStatement") {
