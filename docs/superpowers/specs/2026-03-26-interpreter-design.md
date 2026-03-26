@@ -67,8 +67,8 @@ Returns Effect because:
 | `Lambda(params, body)` | `Closure(params, body, currentEnv)` — captures env |
 | `App(func, args)` | Eval func to Closure, apply args (curried, see below) |
 | `Force(expr)` | Eval expr — in pure context, just evaluates |
-| `StringInterp(parts)` | Eval each InterpExpr part, coerce to string, concatenate with InterpText parts |
-| `DotAccess(obj, field)` | Resolve dotted name for declared function lookup |
+| `StringInterp(parts)` | Eval each InterpExpr part, coerce to string (see below), concatenate with InterpText parts |
+| `DotAccess(obj, field)` | EvalError in v1 — field access on values not supported. Dotted names for declared functions also error (declared functions can't be evaluated) |
 
 ### Statement evaluation
 
@@ -76,10 +76,18 @@ Statements modify the environment:
 
 | Statement | Rule |
 |-----------|------|
-| `Declaration(name, value)` | Eval value, bind name in env, return updated env |
+| `Declaration(name, value)` | Eval value, bind name in env, return updated env. `mutable` flag ignored. `typeAnnotation` ignored (interpreter is dynamically typed). |
 | `Declare(name, type)` | No-op — declared functions can't be evaluated |
 | `ForceStatement(expr)` | Eval the Force expression, discard value |
 | `ExprStatement(expr)` | Eval expression, discard value |
+
+### Program evaluation
+
+`evalProgram(program)`:
+1. Start with empty env
+2. Eval each statement sequentially, threading the env
+3. Return value of the last statement. If the last statement is a Declaration → return its value. If ForceStatement/ExprStatement → return the evaluated expression. If Declare → return Unit.
+4. Empty program (no statements) → return Unit.
 
 ### Curried application
 
@@ -94,12 +102,32 @@ Application with `App(func, [arg1, arg2])`:
 
 For v1, handle exact match and partial application. Over-application can be deferred.
 
+### Zero-param lambdas
+
+`Lambda([], body)` evaluates to `Closure([], body, env)`. Applying with `App(closure, [])` evaluates the body immediately — making zero-arg lambdas a thunk mechanism.
+
 ### Operator semantics
 
-Arithmetic (`+`, `-`, `*`, `/`, `%`): Both operands must be Num. Result is Num.
+Arithmetic (`+`, `-`, `*`, `/`, `%`): Both operands must be Num. Result is Num. Division/modulo by zero → EvalError.
 String concat (`++`): Both operands must be Str. Result is Str.
 Comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`): Both operands same type. Result is Bool.
 Logical (`and`, `or`, `xor`): Both operands must be Bool. Result is Bool.
+
+### String coercion (for interpolation)
+
+When a value appears inside `${}` in a StringInterp, coerce to string:
+
+| Value | Coercion |
+|-------|----------|
+| `Num(n)` | `String(n)` — e.g., `"42"`, `"3.14"` |
+| `Str(s)` | `s` (identity) |
+| `Bool(b)` | `"true"` or `"false"` |
+| `Unit` | `"()"` |
+| `Closure(...)` | EvalError — closures cannot be coerced to string |
+
+### Integer vs Float
+
+Both `IntLiteral` and `FloatLiteral` map to `Num(number)`. The distinction is collapsed — JavaScript has no integer type. If the language ever needs integer semantics, this will need revision.
 
 ## Handling `declare` and Force
 
@@ -157,11 +185,31 @@ evalExpr(App(Lambda(["x"], BinaryExpr("*", Ident("x"), IntLiteral(2))), [IntLite
 evalExpr(App(Lambda(["a", "b"], ...), [IntLiteral(3)]), emptyEnv) → Closure(["b"], ...)
 ```
 
+### Correctness comparison mechanism
+
+The interpreter produces `Value` (Num, Str, Bool, Unit, Closure). The compiled JS produces JS values. To compare them, we extract the interpreter's Value to a JS primitive:
+
+```typescript
+toJS: (value: Value) => unknown
+toJS(Num(n)) = n           // number
+toJS(Str(s)) = s           // string
+toJS(Bool(b)) = b          // boolean
+toJS(Unit) = undefined     // undefined
+toJS(Closure(...)) = ???   // closures can't be compared across representations
+```
+
+For the correctness property test, we only test programs that produce non-closure values (Num, Str, Bool, Unit). Closure-producing programs are tested separately via application (apply closure, check the result is a primitive).
+
+Note: Closure equality is NOT supported. Two closures capturing the same environment are not structurally comparable because the env HashMap and body AST are complex objects. Schema equality on `Closure` with `Schema.Any` for env will not work. This is acceptable — closures are tested by their behavior (apply and check result), not by identity.
+
 ### Property tests (once interpreter + compiler both work on same programs)
 ```typescript
-// Compiler correctness: eval(ast) ≡ run(codegen(ast))
+// Compiler correctness (pure programs only):
+// toJS(eval(ast)) === evalJS(codegen(ast))
+
 // Determinism: eval(ast) called twice gives same result
 // Block optimization: eval(Block([], e)) ≡ eval(e)
+// Lambda: eval(App(Lambda([x], body), [v])) ≡ eval(body, env + {x: v})
 ```
 
 ## What This Does NOT Include
