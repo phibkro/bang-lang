@@ -8,5 +8,6 @@ export * as Lexer from "./Lexer.js";
 export * as Parser from "./Parser.js";
 export * as SourceMap from "./SourceMap.js";
 export * as Span from "./Span.js";
+export * as Value from "./Value.js";
 export * as Token from "./Token.js";
 export * as TypedAst from "./TypedAst.js";
