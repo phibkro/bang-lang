@@ -1,5 +1,6 @@
 import { Effect, HashMap, Match, Option } from "effect";
 import type * as Ast from "./Ast.js";
+import type * as Span from "./Span.js";
 import { Num, Str, Bool, Unit, Closure, EvalError, coerceToString, type Value } from "./Value.js";
 
 type Env = HashMap.HashMap<string, Value>;
@@ -121,7 +122,7 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
 const applyClosure = (
   closure: Extract<Value, { _tag: "Closure" }>,
   args: Value[],
-  span: Ast.Span,
+  span: Span.Span,
 ): Effect.Effect<Value, EvalError> => {
   const { params, body, env: closureEnv } = closure;
 
@@ -159,7 +160,7 @@ const applyBinaryOp = (
   op: string,
   left: Value,
   right: Value,
-  span: Ast.Span,
+  span: Span.Span,
 ): Effect.Effect<Value, EvalError> => {
   // Arithmetic: both must be Num
   if (op === "+" || op === "-" || op === "*" || op === "/" || op === "%") {
@@ -252,7 +253,7 @@ const applyBinaryOp = (
   return Effect.fail(new EvalError({ message: `Unknown operator: ${op}`, span }));
 };
 
-const applyUnaryOp = (op: string, val: Value, span: Ast.Span): Effect.Effect<Value, EvalError> => {
+const applyUnaryOp = (op: string, val: Value, span: Span.Span): Effect.Effect<Value, EvalError> => {
   if (op === "-") {
     if (val._tag !== "Num")
       return Effect.fail(new EvalError({ message: "Unary - requires number", span }));
