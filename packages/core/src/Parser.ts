@@ -130,6 +130,163 @@ const parseProgram = (s: ParseState): P<Ast.Program> =>
   });
 
 // ---------------------------------------------------------------------------
+// Type declarations
+// ---------------------------------------------------------------------------
+
+const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "type");
+    const [nameTok, s2] = yield* expect(s1, "TypeIdent");
+    const typeName = tokenValue(nameTok);
+
+    // Collect type params: lowercase Ident tokens until `=`
+    const collectParams = (
+      params: ReadonlyArray<string>,
+      st: ParseState,
+    ): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isEq = yield* check(st, "Operator", "=");
+        if (isEq) return [params, st] as const;
+        const [tok, st2] = yield* expect(st, "Ident");
+        return yield* collectParams([...params, tokenValue(tok)], st2);
+      });
+
+    const [typeParams, s3] = yield* collectParams([], s2);
+    const typeParamSet = new Set(typeParams);
+    const [, s4] = yield* expect(s3, "Operator", "=");
+
+    // Parse constructors separated by `|`
+    const collectConstructors = (
+      ctors: ReadonlyArray<Ast.Constructor>,
+      st: ParseState,
+    ): P<ReadonlyArray<Ast.Constructor>> =>
+      Effect.gen(function* () {
+        const [ctor, st2] = yield* parseConstructor(st, typeParamSet);
+        const newCtors = [...ctors, ctor];
+        const hasPipe = yield* check(st2, "Delimiter", "|");
+        if (!hasPipe) return [newCtors, st2] as const;
+        const [, st3] = yield* advance(st2); // consume |
+        return yield* collectConstructors(newCtors, st3);
+      });
+
+    const [constructors, s5] = yield* collectConstructors([], s4);
+    const lastCtor = constructors[constructors.length - 1];
+    const endSpan = lastCtor !== undefined ? lastCtor.span : tokenSpan(nameTok);
+    return [
+      new Ast.TypeDecl({
+        name: typeName,
+        typeParams: [...typeParams],
+        constructors: [...constructors],
+        span: Span.merge(tokenSpan(startTok), endSpan),
+      }),
+      s5,
+    ] as const;
+  });
+
+const parseConstructor = (
+  s: ParseState,
+  typeParamNames: ReadonlySet<string>,
+): P<Ast.Constructor> =>
+  Effect.gen(function* () {
+    const [nameTok, s1] = yield* expect(s, "TypeIdent");
+    const ctorName = tokenValue(nameTok);
+
+    // Check for named fields: `{`
+    const isBrace = yield* check(s1, "Delimiter", "{");
+    if (isBrace) {
+      const [, s2] = yield* advance(s1); // consume {
+      const collectFields = (
+        fields: ReadonlyArray<{ readonly name: string; readonly type: Ast.Type }>,
+        st: ParseState,
+      ): P<ReadonlyArray<{ readonly name: string; readonly type: Ast.Type }>> =>
+        Effect.gen(function* () {
+          const isClose = yield* check(st, "Delimiter", "}");
+          if (isClose) return [fields, st] as const;
+          // Consume comma between fields if present
+          if (fields.length > 0) {
+            const hasComma = yield* check(st, "Delimiter", ",");
+            if (hasComma) {
+              const [, st2] = yield* advance(st);
+              st = st2;
+            }
+          }
+          const [fieldNameTok, st2] = yield* expect(st, "Ident");
+          const [, st3] = yield* expect(st2, "Delimiter", ":");
+          const [fieldType, st4] = yield* parsePrimaryType(st3);
+          return yield* collectFields(
+            [...fields, { name: tokenValue(fieldNameTok), type: fieldType }],
+            st4,
+          );
+        });
+
+      const [fields, s3] = yield* collectFields([], s2);
+      const [endTok, s4] = yield* expect(s3, "Delimiter", "}");
+      return [
+        new Ast.NamedConstructor({
+          tag: ctorName,
+          fields: [...fields],
+          span: Span.merge(tokenSpan(nameTok), tokenSpan(endTok)),
+        }),
+        s4,
+      ] as const;
+    }
+
+    // Positional fields: collect TypeIdent tokens and type-param Ident tokens
+    // Stop at `|`, `;`, `}`, EOF, any Keyword, any Operator
+    const collectPositional = (
+      fields: ReadonlyArray<Ast.Type>,
+      st: ParseState,
+    ): P<ReadonlyArray<Ast.Type>> =>
+      Effect.gen(function* () {
+        const atEnd = yield* isAtEnd(st);
+        if (atEnd) return [fields, st] as const;
+        const t = yield* peek(st);
+        const tag = tokenTag(t);
+        // Stop tokens
+        if (tag === "Keyword" || tag === "Operator") return [fields, st] as const;
+        if (tag === "Delimiter") {
+          const v = tokenValue(t);
+          if (v === "|" || v === ";" || v === "}") return [fields, st] as const;
+        }
+        // Accept TypeIdent
+        if (tag === "TypeIdent") {
+          const [tok, st2] = yield* advance(st);
+          const ty = new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) });
+          return yield* collectPositional([...fields, ty], st2);
+        }
+        // Accept Ident only if it's a type param
+        if (tag === "Ident" && typeParamNames.has(tokenValue(t))) {
+          const [tok, st2] = yield* advance(st);
+          const ty = new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) });
+          return yield* collectPositional([...fields, ty], st2);
+        }
+        // Anything else (including non-type-param Ident) — stop
+        return [fields, st] as const;
+      });
+
+    const [fields, s2] = yield* collectPositional([], s1);
+    if (fields.length === 0) {
+      return [
+        new Ast.NullaryConstructor({
+          tag: ctorName,
+          span: tokenSpan(nameTok),
+        }),
+        s2,
+      ] as const;
+    }
+    // fields.length > 0 guaranteed by the `if (fields.length === 0)` guard above
+    const lastField = fields[fields.length - 1] as Ast.Type;
+    return [
+      new Ast.PositionalConstructor({
+        tag: ctorName,
+        fields: [...fields],
+        span: Span.merge(tokenSpan(nameTok), lastField.span),
+      }),
+      s2,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
 // Statement dispatch
 // ---------------------------------------------------------------------------
 
@@ -138,6 +295,7 @@ const parseStatement = (s: ParseState): P<Ast.Stmt> =>
     const t = yield* peek(s);
 
     if (tokenTag(t) === "Keyword" && tokenValue(t) === "declare") return yield* parseDeclare(s);
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "type") return yield* parseTypeDecl(s);
     if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return yield* parseForceStatement(s);
     if (tokenTag(t) === "Ident") {
       return yield* Option.match(peekAt(s, 1), {
@@ -667,6 +825,11 @@ const parsePrimaryType = (s: ParseState): P<Ast.Type> =>
     if (tokenTag(t) === "TypeIdent" && tokenValue(t) === "Effect") return yield* parseEffectType(s);
 
     if (tokenTag(t) === "TypeIdent") {
+      const [tok, s1] = yield* advance(s);
+      return [new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
+
+    if (tokenTag(t) === "Ident") {
       const [tok, s1] = yield* advance(s);
       return [new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
     }

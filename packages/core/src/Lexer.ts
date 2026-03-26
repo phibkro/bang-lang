@@ -23,7 +23,6 @@ import {
 
 const KEYWORDS = new Set([
   "mut",
-  "comptime",
   "type",
   "declare",
   "from",
@@ -34,17 +33,14 @@ const KEYWORDS = new Set([
   "and",
   "or",
   "xor",
-  "where",
-  "defer",
   "if",
   "transaction",
-  "race",
-  "fork",
-  "scoped",
-  "effect",
+  "gen",
+  "on",
+  "use",
 ]);
 
-const DELIMITER_CHARS = new Set(["{", "}", "(", ")", "[", "]", ":", ";", ","]);
+const DELIMITER_CHARS = new Set(["{", "}", "(", ")", "[", "]", ":", ";", ",", "|"]);
 
 const TWO_CHAR_OPS = new Set(["->", "<-", "==", "!=", "<=", ">=", "++"]);
 
