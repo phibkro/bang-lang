@@ -22,11 +22,11 @@ class Bool extends Schema.TaggedClass<Bool>()("Bool", { value: Schema.Boolean })
 class Unit extends Schema.TaggedClass<Unit>()("Unit", {}) {}
 class Closure extends Schema.TaggedClass<Closure>()("Closure", {
   params: Schema.Array(Schema.String),
-  body: Schema.suspend(() => ExprSchema),    // Ast.Expr
-  env: Schema.Any,                            // Env (HashMap)
+  body: Schema.suspend(() => ExprSchema), // Ast.Expr
+  env: Schema.Any, // Env (HashMap)
 }) {}
 
-type Value = Num | Str | Bool | Unit | Closure
+type Value = Num | Str | Bool | Unit | Closure;
 ```
 
 Schema.TaggedClass gives free equality for comparing interpreter output with compiled output.
@@ -34,7 +34,7 @@ Schema.TaggedClass gives free equality for comparing interpreter output with com
 ## Environment
 
 ```typescript
-type Env = HashMap<string, Value>
+type Env = HashMap<string, Value>;
 ```
 
 Immutable HashMap from Effect. Child scopes created by `HashMap.set` — parent bindings remain accessible.
@@ -42,48 +42,50 @@ Immutable HashMap from Effect. Child scopes created by `HashMap.set` — parent 
 ## Core Function
 
 ```typescript
-eval: (expr: Ast.Expr, env: Env) => Effect<Value, EvalError>
+eval: (expr: Ast.Expr, env: Env) => Effect<Value, EvalError>;
 ```
 
 Returns Effect because:
+
 - Undefined variable → EvalError
 - Type mismatch (adding string to number) → EvalError
 - Division by zero → EvalError
 
 ## Evaluation Rules
 
-| Node | Rule |
-|------|------|
-| `IntLiteral(n)` | `Num(n)` |
-| `FloatLiteral(n)` | `Num(n)` |
-| `StringLiteral(s)` | `Str(s)` |
-| `BoolLiteral(b)` | `Bool(b)` |
-| `UnitLiteral` | `Unit` |
-| `Ident(name)` | Lookup name in env. Missing → EvalError |
-| `BinaryExpr(op, l, r)` | Eval both sides, apply operator. Type mismatch → EvalError |
-| `UnaryExpr("-", e)` | Eval e, negate. Non-Num → EvalError |
-| `UnaryExpr("not", e)` | Eval e, logical not. Non-Bool → EvalError |
-| `Block(stmts, expr)` | Eval statements in child env, return eval of final expr |
-| `Lambda(params, body)` | `Closure(params, body, currentEnv)` — captures env |
-| `App(func, args)` | Eval func to Closure, apply args (curried, see below) |
-| `Force(expr)` | Eval expr — in pure context, just evaluates |
-| `StringInterp(parts)` | Eval each InterpExpr part, coerce to string (see below), concatenate with InterpText parts |
+| Node                    | Rule                                                                                                                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IntLiteral(n)`         | `Num(n)`                                                                                                                                       |
+| `FloatLiteral(n)`       | `Num(n)`                                                                                                                                       |
+| `StringLiteral(s)`      | `Str(s)`                                                                                                                                       |
+| `BoolLiteral(b)`        | `Bool(b)`                                                                                                                                      |
+| `UnitLiteral`           | `Unit`                                                                                                                                         |
+| `Ident(name)`           | Lookup name in env. Missing → EvalError                                                                                                        |
+| `BinaryExpr(op, l, r)`  | Eval both sides, apply operator. Type mismatch → EvalError                                                                                     |
+| `UnaryExpr("-", e)`     | Eval e, negate. Non-Num → EvalError                                                                                                            |
+| `UnaryExpr("not", e)`   | Eval e, logical not. Non-Bool → EvalError                                                                                                      |
+| `Block(stmts, expr)`    | Eval statements in child env, return eval of final expr                                                                                        |
+| `Lambda(params, body)`  | `Closure(params, body, currentEnv)` — captures env                                                                                             |
+| `App(func, args)`       | Eval func to Closure, apply args (curried, see below)                                                                                          |
+| `Force(expr)`           | Eval expr — in pure context, just evaluates                                                                                                    |
+| `StringInterp(parts)`   | Eval each InterpExpr part, coerce to string (see below), concatenate with InterpText parts                                                     |
 | `DotAccess(obj, field)` | EvalError in v1 — field access on values not supported. Dotted names for declared functions also error (declared functions can't be evaluated) |
 
 ### Statement evaluation
 
 Statements modify the environment:
 
-| Statement | Rule |
-|-----------|------|
+| Statement                  | Rule                                                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `Declaration(name, value)` | Eval value, bind name in env, return updated env. `mutable` flag ignored. `typeAnnotation` ignored (interpreter is dynamically typed). |
-| `Declare(name, type)` | No-op — declared functions can't be evaluated |
-| `ForceStatement(expr)` | Eval the Force expression, discard value |
-| `ExprStatement(expr)` | Eval expression, discard value |
+| `Declare(name, type)`      | No-op — declared functions can't be evaluated                                                                                          |
+| `ForceStatement(expr)`     | Eval the Force expression, discard value                                                                                               |
+| `ExprStatement(expr)`      | Eval expression, discard value                                                                                                         |
 
 ### Program evaluation
 
 `evalProgram(program)`:
+
 1. Start with empty env
 2. Eval each statement sequentially, threading the env
 3. Return value of the last statement. If the last statement is a Declaration → return its value. If ForceStatement/ExprStatement → return the evaluated expression. If Declare → return Unit.
@@ -94,6 +96,7 @@ Statements modify the environment:
 Lambdas are curried: `a b -> { a + b }` means params = ["a", "b"].
 
 Application with `App(func, [arg1, arg2])`:
+
 1. Eval `func` → `Closure(["a", "b"], body, closureEnv)`
 2. Eval `arg1` → `v1`
 3. If args.length < params.length: return `Closure(remainingParams, body, extendedEnv)` (partial application)
@@ -117,12 +120,12 @@ Logical (`and`, `or`, `xor`): Both operands must be Bool. Result is Bool.
 
 When a value appears inside `${}` in a StringInterp, coerce to string:
 
-| Value | Coercion |
-|-------|----------|
-| `Num(n)` | `String(n)` — e.g., `"42"`, `"3.14"` |
-| `Str(s)` | `s` (identity) |
-| `Bool(b)` | `"true"` or `"false"` |
-| `Unit` | `"()"` |
+| Value          | Coercion                                         |
+| -------------- | ------------------------------------------------ |
+| `Num(n)`       | `String(n)` — e.g., `"42"`, `"3.14"`             |
+| `Str(s)`       | `s` (identity)                                   |
+| `Bool(b)`      | `"true"` or `"false"`                            |
+| `Unit`         | `"()"`                                           |
 | `Closure(...)` | EvalError — closures cannot be coerced to string |
 
 ### Integer vs Float
@@ -132,6 +135,7 @@ Both `IntLiteral` and `FloatLiteral` map to `Num(number)`. The distinction is co
 ## Handling `declare` and Force
 
 Declared functions (like `console.log`) have no Bang implementation. The interpreter:
+
 - Skips `Declare` statements (no-op)
 - If a Force evaluates a declared function → EvalError("Cannot evaluate external function")
 
@@ -159,15 +163,16 @@ class EvalError extends Schema.TaggedError<EvalError>()("EvalError", {
 
 ```typescript
 // Evaluate an AST program, return the last expression's value
-evalProgram: (program: Ast.Program) => Effect<Value, EvalError>
+evalProgram: (program: Ast.Program) => Effect<Value, EvalError>;
 
 // Evaluate a single expression in an environment
-evalExpr: (expr: Ast.Expr, env: Env) => Effect<Value, EvalError>
+evalExpr: (expr: Ast.Expr, env: Env) => Effect<Value, EvalError>;
 ```
 
 ## Testing Strategy
 
 ### Unit tests (immediate)
+
 ```typescript
 // Literals
 evalExpr(IntLiteral(42), emptyEnv) → Num(42)
@@ -203,6 +208,7 @@ For the correctness property test, we only test programs that produce non-closur
 Note: Closure equality is NOT supported. Two closures capturing the same environment are not structurally comparable because the env HashMap and body AST are complex objects. Schema equality on `Closure` with `Schema.Any` for env will not work. This is acceptable — closures are tested by their behavior (apply and check result), not by identity.
 
 ### Property tests (once interpreter + compiler both work on same programs)
+
 ```typescript
 // Compiler correctness (pure programs only):
 // toJS(eval(ast)) === evalJS(codegen(ast))

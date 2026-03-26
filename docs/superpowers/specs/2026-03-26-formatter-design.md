@@ -8,6 +8,7 @@
 One function: `format = render ∘ toDoc ∘ parse`. The pretty-printer IS the formatter — there's no separate "unformatted" mode. Every AST-to-string conversion goes through the same Doc IR and produces canonical output.
 
 This unlocks the roundtrip property test:
+
 ```
 eval(parse(format(source))) ≡ eval(parse(source))
 ```
@@ -29,15 +30,15 @@ The key insight from Wadler-Lindig: `Doc.group(doc)` tries to fit `doc` on one l
 
 The spec defines 14 rules. We implement the ones relevant to v0.2 features:
 
-| # | Rule | How |
-|---|------|-----|
-| 1 | Semicolons after every statement | `toDoc` emits `;` after each statement in blocks |
-| 2 | Braces around all block bodies | `toDoc` always emits `{ }` for blocks |
-| 6 | Single space around binary operators | `Doc.catWithSpace` around operator |
-| 7 | Single space after keywords | `Doc.catWithSpace` after `declare`, etc. |
-| 8 | Newline after `{` and before `}` when block breaks; space-padded when flat | `Doc.line` inside `Doc.group` — resolves to space when flat, newline when broken |
-| 9 | Two-space indentation inside blocks | `Doc.nest(2, ...)` |
-| 12 | Unit is `()` in value position | `Doc.text("()")` for UnitLiteral |
+| #   | Rule                                                                       | How                                                                              |
+| --- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 1   | Semicolons after every statement                                           | `toDoc` emits `;` after each statement in blocks                                 |
+| 2   | Braces around all block bodies                                             | `toDoc` always emits `{ }` for blocks                                            |
+| 6   | Single space around binary operators                                       | `Doc.catWithSpace` around operator                                               |
+| 7   | Single space after keywords                                                | `Doc.catWithSpace` after `declare`, etc.                                         |
+| 8   | Newline after `{` and before `}` when block breaks; space-padded when flat | `Doc.line` inside `Doc.group` — resolves to space when flat, newline when broken |
+| 9   | Two-space indentation inside blocks                                        | `Doc.nest(2, ...)`                                                               |
+| 12  | Unit is `()` in value position                                             | `Doc.text("()")` for UnitLiteral                                                 |
 
 Deferred (features not yet implemented): 3 (lambda params — bare Haskell-style), 4 (mutation chaining), 5 (chained unifications), 10 (import sorting), 11 (type annotation inference), 13 (transaction), 14 (match arms).
 
@@ -82,6 +83,7 @@ Block(stmts, expr)     → group(
 ```
 
 `Doc.group` tries flat first: `{ x = 1; y = 2; x + y }`. If too wide, breaks:
+
 ```
 {
   x = 1;
@@ -164,10 +166,10 @@ packages/core/test/
 
 ```typescript
 // Format a parsed AST back to canonical Bang source
-format: (program: Ast.Program) => string
+format: (program: Ast.Program) => string;
 
 // Format a source string (parse then format)
-formatSource: (source: string) => Effect<string, CompilerError>
+formatSource: (source: string) => Effect<string, CompilerError>;
 ```
 
 `formatSource = source → lex → parse → format` — this is the `bang fmt` pipeline.
@@ -187,14 +189,14 @@ bang fmt --check <file.bang> # Check if formatted, exit 1 if not
 
 ```typescript
 it.effect("format roundtrip preserves semantics", () =>
-  Effect.gen(function*() {
-    const source = "result = { x = 1 + 2 * 3; y = x; y }"
-    const formatted = yield* Formatter.formatSource(source)
-    const original = yield* interpret(source)
-    const roundtripped = yield* interpret(formatted)
-    expect(roundtripped).toEqual(original)
-  })
-)
+  Effect.gen(function* () {
+    const source = "result = { x = 1 + 2 * 3; y = x; y }";
+    const formatted = yield* Formatter.formatSource(source);
+    const original = yield* interpret(source);
+    const roundtripped = yield* interpret(formatted);
+    expect(roundtripped).toEqual(original);
+  }),
+);
 ```
 
 ### Idempotence
@@ -202,21 +204,21 @@ it.effect("format roundtrip preserves semantics", () =>
 ```typescript
 // format(format(source)) === format(source)
 it.effect("formatting is idempotent", () =>
-  Effect.gen(function*() {
-    const source = "result={x=1+2*3;y=x;y}"
-    const once = yield* Formatter.formatSource(source)
-    const twice = yield* Formatter.formatSource(once)
-    expect(twice).toBe(once)
-  })
-)
+  Effect.gen(function* () {
+    const source = "result={x=1+2*3;y=x;y}";
+    const once = yield* Formatter.formatSource(source);
+    const twice = yield* Formatter.formatSource(once);
+    expect(twice).toBe(once);
+  }),
+);
 ```
 
 ### Canonical output tests
 
 ```typescript
 // Specific formatting expectations
-expect(format(parse("x=1+2"))).toBe("x = 1 + 2")
-expect(format(parse("result={x=1;x}"))).toBe("result = { x = 1; x }")
+expect(format(parse("x=1+2"))).toBe("x = 1 + 2");
+expect(format(parse("result={x=1;x}"))).toBe("result = { x = 1; x }");
 // or multi-line if too wide
 ```
 

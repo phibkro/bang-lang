@@ -99,6 +99,7 @@ Three layers, ordered by cost-effectiveness:
 3. **Unit/E2E tests** — Specific behaviors and edge cases. Division by zero. Undeclared variables. Full program compilation. Catch individual bugs.
 
 **Correctness equation** (Bahr & Hutton "Calculating Correct Compilers"):
+
 ```
 eval(ast) ≡ run(codegen(ast))     -- compiler correctness
 eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
@@ -111,4 +112,4 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 - Interpreter design: `docs/superpowers/specs/2026-03-26-interpreter-design.md`
 - v0.1 plan: `docs/superpowers/plans/2026-03-25-bang-compiler-v0.1.md` (completed)
 - v0.2 plan: `docs/superpowers/plans/2026-03-25-bang-compiler-v0.2.md` (completed)
-- Effect repo: `~/Projects/Repos/effect` — reference for idiomatic Effect patterns
+- Effect repo: `~/Projects/Repos/effect` — full source for Effect, @effect/printer, @effect/cli, etc. Read source here instead of node_modules.

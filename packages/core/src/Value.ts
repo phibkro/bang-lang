@@ -14,14 +14,7 @@ export type Value = Data.TaggedEnum<{
   };
 }>;
 
-export const {
-  Num,
-  Str,
-  Bool,
-  Unit,
-  Closure,
-  $match,
-} = Data.taggedEnum<Value>();
+export const { Num, Str, Bool, Unit, Closure, $match } = Data.taggedEnum<Value>();
 
 export class EvalError extends Schema.TaggedError<EvalError>()("EvalError", {
   message: Schema.String,
@@ -53,4 +46,3 @@ export const coerceToString = (v: Value): Effect.Effect<string, EvalError> =>
         }),
       ),
   });
-

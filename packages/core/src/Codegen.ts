@@ -157,7 +157,9 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap): string =>
   Match.value(stmt).pipe(
     Match.tag("Declaration", (s) => `const ${s.name} = ${emitExpr(s.value, decls)}`),
     Match.tag("ForceStatement", (s) =>
-      s.expr._tag === "Force" ? `yield* ${emitExpr(s.expr.expr, decls)}` : `yield* ${emitExpr(s.expr, decls)}`,
+      s.expr._tag === "Force"
+        ? `yield* ${emitExpr(s.expr.expr, decls)}`
+        : `yield* ${emitExpr(s.expr, decls)}`,
     ),
     Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls)),
     Match.tag("Declare", () => ""),

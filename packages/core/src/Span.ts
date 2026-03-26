@@ -19,8 +19,7 @@ export class Span extends Schema.Class<Span>("Span")({
 
 export const empty = new Span({ start: 0, end: 0 });
 
-export const merge = (a: Span, b: Span): Span =>
-  new Span({ start: a.start, end: b.end });
+export const merge = (a: Span, b: Span): Span => new Span({ start: a.start, end: b.end });
 
 /**
  * Compute line (1-indexed) and column (0-indexed) from a source offset.

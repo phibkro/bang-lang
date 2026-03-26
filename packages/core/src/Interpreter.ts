@@ -4,19 +4,12 @@ import { Num, Str, Bool, Unit, Closure, EvalError, coerceToString, type Value } 
 
 type Env = HashMap.HashMap<string, Value>;
 
-export const evalExpr = (
-  expr: Ast.Expr,
-  env: Env,
-): Effect.Effect<Value, EvalError> =>
+export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalError> =>
   Match.value(expr).pipe(
     Match.tag("IntLiteral", (e) => Effect.succeed(Num({ value: e.value }))),
     Match.tag("FloatLiteral", (e) => Effect.succeed(Num({ value: e.value }))),
-    Match.tag("StringLiteral", (e) =>
-      Effect.succeed(Str({ value: e.value })),
-    ),
-    Match.tag("BoolLiteral", (e) =>
-      Effect.succeed(Bool({ value: e.value })),
-    ),
+    Match.tag("StringLiteral", (e) => Effect.succeed(Str({ value: e.value }))),
+    Match.tag("BoolLiteral", (e) => Effect.succeed(Bool({ value: e.value }))),
     Match.tag("UnitLiteral", () => Effect.succeed(Unit())),
     Match.tag("Ident", (e) =>
       Option.match(HashMap.get(env, e.name), {
@@ -101,10 +94,7 @@ export const evalExpr = (
     Match.exhaustive,
   );
 
-const evalStmt = (
-  stmt: Ast.Stmt,
-  env: Env,
-): Effect.Effect<Env, EvalError> =>
+const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
   Match.value(stmt).pipe(
     Match.tag("Declaration", (s) =>
       Effect.gen(function* () {
@@ -172,54 +162,27 @@ const applyBinaryOp = (
   span: Ast.Span,
 ): Effect.Effect<Value, EvalError> => {
   // Arithmetic: both must be Num
-  if (
-    op === "+" ||
-    op === "-" ||
-    op === "*" ||
-    op === "/" ||
-    op === "%"
-  ) {
+  if (op === "+" || op === "-" || op === "*" || op === "/" || op === "%") {
     if (left._tag !== "Num" || right._tag !== "Num")
-      return Effect.fail(
-        new EvalError({ message: `Operator ${op} requires numbers`, span }),
-      );
+      return Effect.fail(new EvalError({ message: `Operator ${op} requires numbers`, span }));
     const l = left.value,
       r = right.value;
     if ((op === "/" || op === "%") && r === 0)
-      return Effect.fail(
-        new EvalError({ message: "Division by zero", span }),
-      );
+      return Effect.fail(new EvalError({ message: "Division by zero", span }));
     const result =
-      op === "+"
-        ? l + r
-        : op === "-"
-          ? l - r
-          : op === "*"
-            ? l * r
-            : op === "/"
-              ? l / r
-              : l % r;
+      op === "+" ? l + r : op === "-" ? l - r : op === "*" ? l * r : op === "/" ? l / r : l % r;
     return Effect.succeed(Num({ value: result }));
   }
 
   // String concat
   if (op === "++") {
     if (left._tag !== "Str" || right._tag !== "Str")
-      return Effect.fail(
-        new EvalError({ message: "Operator ++ requires strings", span }),
-      );
+      return Effect.fail(new EvalError({ message: "Operator ++ requires strings", span }));
     return Effect.succeed(Str({ value: left.value + right.value }));
   }
 
   // Comparison: same type required
-  if (
-    op === "==" ||
-    op === "!=" ||
-    op === "<" ||
-    op === ">" ||
-    op === "<=" ||
-    op === ">="
-  ) {
+  if (op === "==" || op === "!=" || op === "<" || op === ">" || op === "<=" || op === ">=") {
     if (left._tag !== right._tag)
       return Effect.fail(
         new EvalError({
@@ -282,43 +245,28 @@ const applyBinaryOp = (
       );
     const l = left.value,
       r = right.value;
-    const result =
-      op === "and" ? l && r : op === "or" ? l || r : l !== r;
+    const result = op === "and" ? l && r : op === "or" ? l || r : l !== r;
     return Effect.succeed(Bool({ value: result }));
   }
 
-  return Effect.fail(
-    new EvalError({ message: `Unknown operator: ${op}`, span }),
-  );
+  return Effect.fail(new EvalError({ message: `Unknown operator: ${op}`, span }));
 };
 
-const applyUnaryOp = (
-  op: string,
-  val: Value,
-  span: Ast.Span,
-): Effect.Effect<Value, EvalError> => {
+const applyUnaryOp = (op: string, val: Value, span: Ast.Span): Effect.Effect<Value, EvalError> => {
   if (op === "-") {
     if (val._tag !== "Num")
-      return Effect.fail(
-        new EvalError({ message: "Unary - requires number", span }),
-      );
+      return Effect.fail(new EvalError({ message: "Unary - requires number", span }));
     return Effect.succeed(Num({ value: -val.value }));
   }
   if (op === "not") {
     if (val._tag !== "Bool")
-      return Effect.fail(
-        new EvalError({ message: "not requires boolean", span }),
-      );
+      return Effect.fail(new EvalError({ message: "not requires boolean", span }));
     return Effect.succeed(Bool({ value: !val.value }));
   }
-  return Effect.fail(
-    new EvalError({ message: `Unknown unary operator: ${op}`, span }),
-  );
+  return Effect.fail(new EvalError({ message: `Unknown unary operator: ${op}`, span }));
 };
 
-export const evalProgram = (
-  program: Ast.Program,
-): Effect.Effect<Value, EvalError> =>
+export const evalProgram = (program: Ast.Program): Effect.Effect<Value, EvalError> =>
   Effect.gen(function* () {
     let env: Env = HashMap.empty();
     let lastValue: Value = Unit();

@@ -50,10 +50,7 @@ describe("Interpreter", () => {
 
   it.effect("evaluates unit literal", () =>
     Effect.gen(function* () {
-      const result = yield* Interpreter.evalExpr(
-        new Ast.UnitLiteral({ span: s }),
-        emptyEnv,
-      );
+      const result = yield* Interpreter.evalExpr(new Ast.UnitLiteral({ span: s }), emptyEnv);
       expect(result).toEqual(Value.Unit());
     }),
   );
@@ -228,10 +225,7 @@ describe("Interpreter", () => {
   it.effect("evaluates variable lookup", () =>
     Effect.gen(function* () {
       const env = HashMap.set(emptyEnv, "x", Value.Num({ value: 99 }));
-      const result = yield* Interpreter.evalExpr(
-        new Ast.Ident({ name: "x", span: s }),
-        env,
-      );
+      const result = yield* Interpreter.evalExpr(new Ast.Ident({ name: "x", span: s }), env);
       expect(result).toEqual(Value.Num({ value: 99 }));
     }),
   );
@@ -254,9 +248,7 @@ describe("Interpreter", () => {
         right: new Ast.StringLiteral({ value: "x", span: s }),
         span: s,
       });
-      const result = yield* Interpreter.evalExpr(expr, emptyEnv).pipe(
-        Effect.either,
-      );
+      const result = yield* Interpreter.evalExpr(expr, emptyEnv).pipe(Effect.either);
       expect(result._tag).toBe("Left");
     }),
   );
@@ -269,9 +261,7 @@ describe("Interpreter", () => {
         right: new Ast.IntLiteral({ value: 0, span: s }),
         span: s,
       });
-      const result = yield* Interpreter.evalExpr(expr, emptyEnv).pipe(
-        Effect.either,
-      );
+      const result = yield* Interpreter.evalExpr(expr, emptyEnv).pipe(Effect.either);
       expect(result._tag).toBe("Left");
     }),
   );
@@ -284,9 +274,7 @@ describe("Interpreter", () => {
         right: new Ast.IntLiteral({ value: 0, span: s }),
         span: s,
       });
-      const result = yield* Interpreter.evalExpr(expr, emptyEnv).pipe(
-        Effect.either,
-      );
+      const result = yield* Interpreter.evalExpr(expr, emptyEnv).pipe(Effect.either);
       expect(result._tag).toBe("Left");
     }),
   );
@@ -411,9 +399,7 @@ describe("Interpreter", () => {
         args: [new Ast.IntLiteral({ value: 1, span: s })],
         span: s,
       });
-      const result = yield* Interpreter.evalExpr(app, emptyEnv).pipe(
-        Effect.either,
-      );
+      const result = yield* Interpreter.evalExpr(app, emptyEnv).pipe(Effect.either);
       expect(result._tag).toBe("Left");
     }),
   );
