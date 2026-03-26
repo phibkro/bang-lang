@@ -92,4 +92,53 @@ describe("Formatter", () => {
       expect(result.trim()).toBe("!foo");
     }),
   );
+
+  it.effect("formats single-expr block", () =>
+    Effect.gen(function* () {
+      const result = yield* fmt("result = { 1 + 2 }");
+      expect(result.trim()).toBe("result = { 1 + 2 }");
+    }),
+  );
+
+  it.effect("formats block with statements", () =>
+    Effect.gen(function* () {
+      const result = yield* fmt("result = { x = 1; y = 2; x + y }");
+      expect(result.trim()).toBe("result = { x = 1; y = 2; x + y }");
+    }),
+  );
+
+  it.effect("formats lambda", () =>
+    Effect.gen(function* () {
+      const result = yield* fmt("double = x -> { x * 2 }");
+      expect(result.trim()).toBe("double = x -> { x * 2 }");
+    }),
+  );
+
+  it.effect("formats multi-param lambda", () =>
+    Effect.gen(function* () {
+      const result = yield* fmt("add = a b -> { a + b }");
+      expect(result.trim()).toBe("add = a b -> { a + b }");
+    }),
+  );
+
+  it.effect("formats application", () =>
+    Effect.gen(function* () {
+      const result = yield* fmt("result = add 3 4");
+      expect(result.trim()).toBe("result = add 3 4");
+    }),
+  );
+
+  it.effect("parenthesizes non-atom arguments", () =>
+    Effect.gen(function* () {
+      const result = yield* fmt("result = add (1 + 2) 3");
+      expect(result.trim()).toBe("result = add (1 + 2) 3");
+    }),
+  );
+
+  it.effect("formats string interpolation", () =>
+    Effect.gen(function* () {
+      const result = yield* fmt('result = "hello ${name}"');
+      expect(result.trim()).toBe('result = "hello ${name}"');
+    }),
+  );
 });

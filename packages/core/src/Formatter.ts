@@ -32,6 +32,26 @@ const PREC: Record<string, number> = {
 // Expression formatting
 // ---------------------------------------------------------------------------
 
+const isAtom = (e: Ast.Expr): boolean => {
+  const tag = e._tag;
+  return (
+    tag === "Ident" ||
+    tag === "IntLiteral" ||
+    tag === "FloatLiteral" ||
+    tag === "StringLiteral" ||
+    tag === "BoolLiteral" ||
+    tag === "UnitLiteral" ||
+    tag === "Block" ||
+    tag === "StringInterp" ||
+    tag === "DotAccess"
+  );
+};
+
+const parenIfNonAtom = (e: Ast.Expr): Doc.Doc<never> => {
+  if (isAtom(e)) return formatExpr(e);
+  return Doc.hcat([Doc.text("("), formatExpr(e), Doc.text(")")]);
+};
+
 const parenIfLowerPrec = (child: Ast.Expr, parentOp: string): Doc.Doc<never> => {
   const childDoc = formatExpr(child);
   if (child._tag === "BinaryExpr" && (PREC[child.op] ?? 0) < (PREC[parentOp] ?? 0)) {
@@ -66,11 +86,33 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
     Match.tag("DotAccess", (e) =>
       Doc.hcat([formatExpr(e.object), Doc.text("."), Doc.text(e.field)]),
     ),
-    // Stubs for Task 2:
-    Match.tag("Block", () => Doc.text("{ ... }")),
-    Match.tag("Lambda", () => Doc.text("<lambda>")),
-    Match.tag("App", () => Doc.text("<app>")),
-    Match.tag("StringInterp", () => Doc.text("<interp>")),
+    Match.tag("Block", (e) => {
+      const stmtDocs = e.statements.map((s) =>
+        Doc.cat(formatTopLevelStmt(s), Doc.text(";")),
+      );
+      const bodyParts = [...stmtDocs, formatExpr(e.expr)];
+      const body = bodyParts.reduce((a, b) => Doc.catWithSoftLine(a, b));
+      return Doc.group(
+        Doc.hcat([Doc.text("{"), Doc.catWithSoftLine(Doc.empty, body), Doc.text(" }")]),
+      );
+    }),
+    Match.tag("Lambda", (e) => {
+      const params = Doc.hsep(e.params.map(Doc.text));
+      return Doc.hcat([params, Doc.text(" -> "), formatExpr(e.body)]);
+    }),
+    Match.tag("App", (e) => {
+      const func = formatExpr(e.func);
+      const args = e.args.map(parenIfNonAtom);
+      return Doc.hsep([func, ...args]);
+    }),
+    Match.tag("StringInterp", (e) => {
+      const parts = e.parts.map((p) =>
+        p._tag === "InterpText"
+          ? Doc.text(p.value)
+          : Doc.hcat([Doc.text("${"), formatExpr(p.value), Doc.text("}")]),
+      );
+      return Doc.hcat([Doc.text('"'), ...parts, Doc.text('"')]);
+    }),
     Match.exhaustive,
   );
 
