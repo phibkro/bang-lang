@@ -2,8 +2,13 @@
 (*
     BANG LANGUAGE SPECIFICATION
     ============================
-    Version: 0.4
+    Version: 0.5
     Transpilation target: Effect TS
+
+    AXIOM
+    ─────
+    Every construct is a description.
+    ! is the only way to make descriptions real.
 *)
 
 
@@ -17,17 +22,54 @@
     The BANG compiler is a formatter and transpiler, not a runtime.
     Effect TS knowledge transfers directly.
 
-    THE FUNDAMENTAL DISTINCTION
-    ───────────────────────────
-    Describing a computation and running a computation
-    are different things. This distinction is BANG's
-    central design principle.
-
-    Every binding is a lazy thunk — a description.
+    THE THUNK AXIOM
+    ───────────────
+    Every binding is a lazy thunk — a description of a computation.
     ! is the single site where descriptions become reality.
+    This is not a framing device. It is load-bearing for every
+    design decision in the language.
 
     x = fetch "https://api.example.com"     -- description, nothing runs
     result = !x                             -- reality, network call happens
+
+    ! MUST PREFIX ALL FORCING
+    ─────────────────────────
+    Mutation, subscription, resource acquisition, and transactions
+    are all thunks. They require ! to execute:
+
+    !x <- 5                     -- mutation is a thunk, must be forced
+    sub = !on stream handler    -- subscription is a thunk
+    !use conn = withDb          -- resource acquisition is a thunk
+    !transaction { ... }        -- transaction is a thunk
+
+    CONSTRUCTS DESCRIBE BEHAVIOR WITHOUT !
+    ──────────────────────────────────────
+    handler = on stream (event) -> { !process event }
+    transfer = transaction { from.balance <- !from.balance - amount }
+    acquisition = use conn = withDb
+
+    -- none of these run until forced
+    sub = !handler
+    !transfer
+    !acquisition (conn) -> { !query conn }
+
+    This makes programs composable values — the push topology,
+    transaction logic, and resource lifecycle are all describable
+    and passable before forcing.
+
+    PURE COMPUTATION DOES NOT NEED !
+    ────────────────────────────────
+    match, blocks, arithmetic, and function application are
+    pure computation. They evaluate without ! because they
+    don't cross the description/reality boundary:
+
+    result = match x {          -- pure branching, no !
+      Some v -> v + 1
+      None -> 0
+    }
+
+    doubled = count * 2         -- pure computation, no !
+    applied = f 42              -- pure application, no !
 
     THE PULL MODEL
     ──────────────
@@ -49,23 +91,34 @@
     Handlers are pull contexts — everything inside
     evaluates via ! at a consistent point in time.
 
-    on count (c) -> {       -- fires when count updates
+    !on count (c) -> {      -- fires when count updates
         !log doubled        -- pulls consistent snapshot
     }
 
-    count <- 5              -- triggers handler
+    !count <- 5             -- triggers handler
 
     WHAT ! UNIFIES
     ──────────────
     ! is the single concept covering:
     - materialisation   thunk    -> value
-    - allocation        Signal   -> value
+    - allocation        mut      -> Ref
+    - mutation          <-       -> Ref.set
+    - subscription      on       -> push registration
+    - resource acq      use      -> scoped cleanup
     - async resolution  Promise  -> value  (implicit await)
     - effect execution  Effect   -> value  (side effects run)
     - error short-circuit        -> propagates to enclosing block
+    - comptime eval     !comptime -> force at compile time
 
     The type of the expression determines which applies.
     The programmer always writes !.
+
+    SCHEDULING QUALIFIERS ON !
+    ──────────────────────────
+    !comptime expr      force at compile time
+    !expr               force at runtime (default)
+
+    ! always leads. Qualifier follows.
 
     SIGNAL vs EFFECT
     ────────────────
@@ -89,12 +142,17 @@
 Program     = Statement* ;
 
 Statement   = Declaration
-            | Mutation
-            | Force
+            | Force                 (* covers mutation, on, use, transaction, all effects *)
             | Import
             | Export
             | EscapeBlock
             ;
+
+(*
+    Mutation is NOT a separate statement type.
+    !x <- 5 is Force of a mutation expression.
+    Everything effectful goes through Force.
+*)
 
 
 (* ─────────────────────────────────────────
@@ -104,6 +162,7 @@ Statement   = Declaration
 Declaration = 'mut'? Ident '=' Expr
             | Ident ':' Type
             | Ident ':' Type Ident Param* '=' Block
+            | 'comptime' Ident '=' Expr
             | 'type' TypeIdent TypeVar* '=' TypeBody
             | 'declare' QualifiedIdent ':' Type
             ;
@@ -132,6 +191,21 @@ Field           = Ident ':' Type ;
     The difference is fundamental:
     x = 5           -- named computation, no allocation
     mut x = 5       -- Ref, allocated, externally pushable via <-
+
+    COMPTIME
+    ────────
+    comptime qualifies a binding — "this thunk is intended to
+    be forced at compile time." ! is still the force. The compiler
+    schedules the force during compilation because of the annotation.
+
+    table = comptime { buildSineTable () }
+    result = !table     -- compiler forces during compilation
+
+    Composable:
+    tableA = comptime { buildTable schemaA }
+    tableB = comptime { buildTable schemaB }
+    tables = comptime { merge tableA tableB }
+    result = !tables    -- compiler forces the whole composition
 
     FUNCTION DECLARATION
     ────────────────────
@@ -303,23 +377,40 @@ Field           = Ident ':' Type ;
     type Fail e = { fail : e -> Nothing }
     type Random = { next : Unit -> Float, nextInt : Int -> Int }
     type Clock = { now : Unit -> DateTime }
+
+    MODULE SYSTEM
+    ─────────────
+    A module is a thunk. Its imports are its R channel.
+    Its exports are its A value. The module's dependency type
+    is INFERRED from what exported thunks actually use — not
+    declared explicitly. Unexported thunks that handle their
+    own dependencies don't leak requirements upward.
+
+    Import statements remain for name resolution but carry
+    no additional semantic weight — the dependency type is
+    always inferred.
 *)
 
 
 (* ─────────────────────────────────────────
-   MUTATION
+   MUTATION (expression, not statement)
    ───────────────────────────────────────── *)
 
-Mutation    = Expr '<-' Expr ;
-
 (*
-    Only valid on mut bindings.
-    Returns the new value, enabling chaining.
-    Chains evaluate right to left:
+    Mutation is an expression, forced with !.
 
-    a <- b <- c <- expr
+    !x <- 5             -- force the mutation
+
+    Without !, mutation is a description:
+    update = x <- 5     -- description of mutation, nothing happens
+    !update              -- now it happens
+
+    Only valid on mut bindings.
+    Returns the new value, enabling chaining:
+
+    !a <- !b <- !c <- expr
     evaluates as:
-    a <- (b <- (c <- expr))
+    !a <- (!b <- (!c <- expr))
 
     Formatter parenthesises chains explicitly.
 *)
@@ -329,7 +420,9 @@ Mutation    = Expr '<-' Expr ;
    FORCE
    ───────────────────────────────────────── *)
 
-Force       = '!' Expr ;
+Force       = '!' Qualifier? Expr ;
+
+Qualifier   = 'comptime' ;
 
 (*
     Resolves by type of Expr:
@@ -337,7 +430,16 @@ Force       = '!' Expr ;
     Effect A E R    yield* Expr
     Promise A       yield* Effect.promise(() => Expr)
     () -> A         yield* Effect.sync(() => Expr())
+    Expr '<-' Expr  yield* Ref.set(target, value)
+    on Expr Expr    yield* subscribeToRef(source, handler)
+    use Ident = E   yield* f((x) => Effect.gen(...))
+    transaction B   yield* STM.commit(STM.gen(...))
     A               Expr  (no-op)
+
+    SCHEDULING
+    ──────────
+    !comptime expr      force at compile time
+    !expr               force at runtime (default)
 
     MUST-HANDLE
     ───────────
@@ -399,17 +501,24 @@ EscapeBlock = 'gen' Block ;
     - A push cycle (handler eventually pushes back to its source)
       is a compile error
 
+    on produces a thunk. ! forces it (starts the subscription).
+
     SYNTAX
     ──────
-    on Source Handler
+    on Source Handler        -- thunk describing a subscription
+    !on Source Handler       -- forced subscription
 
     Source   : a mut binding
     Handler  : a lambda (event) -> Block
 
-    sub = on stream (event) -> {
+    -- describe the subscription
+    handler = on stream (event) -> {
         result = !process event;
         !persist result
     }
+
+    -- force it
+    sub = !handler
 
     Returns a Subscription:
     type Subscription = { abort : Effect Unit {} {} }
@@ -418,9 +527,9 @@ EscapeBlock = 'gen' Block ;
 
     PUSH CYCLE DETECTION
     ────────────────────
-    on a (x) -> { a <- x }      -- COMPILE ERROR: push cycle
-    on a (x) -> { b <- x }      -- ok, pushes to different source
-    on a (_) -> { on b ... }    -- ok, nested subscription
+    on a (x) -> { !a <- x }     -- COMPILE ERROR: push cycle
+    on a (x) -> { !b <- x }     -- ok, pushes to different source
+    on a (_) -> { !on b ... }   -- ok, nested subscription
 
     PUSH + PULL COMPOSITION
     ───────────────────────
@@ -428,7 +537,7 @@ EscapeBlock = 'gen' Block ;
     Everything inside evaluates via ! at a consistent snapshot.
     No glitches possible — the snapshot is taken at handler invocation.
 
-    on count (c) -> {
+    !on count (c) -> {
         doubled = count * 2     -- lazy inside handler
         !log doubled            -- forces at this moment, consistent
     }
@@ -437,8 +546,8 @@ EscapeBlock = 'gen' Block ;
     ─────────────────────────────────────
     use inside on handlers gives per-event resource lifecycle:
 
-    on stream (event) -> {
-        use conn = withDbConnection;    -- acquired per event
+    !on stream (event) -> {
+        !use conn = withDbConnection;   -- acquired per event
         result   = !query conn event;
         !persist result
         -- conn released when handler block exits
@@ -453,17 +562,18 @@ EscapeBlock = 'gen' Block ;
 (*
     'use' flattens callback-taking resource functions
     into linear code. Replaces both defer and scoped.
+    use produces a thunk. ! forces it (acquires the resource).
 
     SYNTAX
     ──────
-    use Ident = Expr ;
+    !use Ident = Expr ;
 
     Expr must be a function that takes a callback:
     f : (a -> Effect b e r) -> Effect b e r
 
     DESUGARING
     ──────────
-    use x = f;
+    !use x = f;
     rest
     -- desugars to
     !f (x) -> { rest }
@@ -481,32 +591,25 @@ EscapeBlock = 'gen' Block ;
 
     -- with use, flat
     result = {
-        use db   = withDb;
-        use tx   = withTransaction db;
-        use lock = withLock tx;
+        !use db   = withDb;
+        !use tx   = withTransaction db;
+        !use lock = withLock tx;
         !doWork lock
     }
 
     RESOURCE LIFECYCLE
     ──────────────────
-    The resource is acquired at the 'use' site.
+    The resource is acquired at the '!use' site.
     Cleanup runs when the enclosing block exits.
     Cleanup is guaranteed even if the block fails.
     Multiple use expressions clean up in LIFO order.
 
-    REPLACES defer
-    ──────────────
-    Any defer pattern is expressible as use with a wrapper:
-
-    -- defer pattern (old)
-    handle = !openFile "path.txt";
-    defer !handle.close;
-    !handle.read
-
-    -- use pattern (preferred)
-    use handle = withFile "path.txt";
-    !handle.read
-    -- handle.close guaranteed on block exit
+    COMPOSABLE WITHOUT FORCING
+    ──────────────────────────
+    acquisition = use conn = withDb
+    -- nothing acquired yet — just a description
+    !acquisition (conn) -> { !query conn }
+    -- now acquired and used
 
     The stdlib provides 'with' wrappers for all common resources.
     Foreign resources without wrappers use the escape hatch.
@@ -527,6 +630,9 @@ ModulePath  = TypeIdent ('.' TypeIdent)* ;
     Module name derived from file path.
     Circular imports are a compile error.
     Modules form a DAG.
+
+    A module is a thunk. Its imports are its R channel.
+    Its exports are its A value. Dependency type is inferred.
 *)
 
 
@@ -545,14 +651,16 @@ Expr        = Expr '.' Ident Atom*          (* composition / field access *)
             | Expr 'and' Expr
             | Expr 'or' Expr
             | Expr 'xor' Expr
-            | '!' Expr                      (* force *)
-            | Expr '<-' Expr                (* mutation *)
+            | '!' Qualifier? Expr           (* force with optional qualifier *)
+            | Expr '<-' Expr                (* mutation expression *)
+            | 'on' Expr Expr                (* push subscription expression *)
+            | 'use' Ident '=' Expr          (* resource acquisition expression *)
+            | 'transaction' Block           (* STM transaction expression *)
             | Ident
             | Literal
             | Block
             | Match
             | Lambda
-            | Transaction
             | '(' Expr ')'
             ;
 
@@ -581,7 +689,7 @@ Block       = '{' Statement* Expr '}' ;
 
 
 (* ─────────────────────────────────────────
-   MATCH
+   MATCH (expression, no ! needed)
    ───────────────────────────────────────── *)
 
 Match       = 'match' Expr '{' Arm+ '}' ;
@@ -589,6 +697,10 @@ Match       = 'match' Expr '{' Arm+ '}' ;
 Arm         = Pattern '->' Expr ;
 
 (*
+    Match is pure computation — it selects a branch.
+    No ! needed. The arms may contain effects (their own !),
+    but the branching itself is pure.
+
     Exhaustive — non-exhaustive match is a type error.
     All arms must return the same type.
     First match wins.
@@ -649,12 +761,25 @@ Param       = Ident
 
 
 (* ─────────────────────────────────────────
-   TRANSACTION
+   TRANSACTION (expression, forced with !)
    ───────────────────────────────────────── *)
 
-Transaction = '!' 'transaction' Block ;
-
 (*
+    transaction produces a thunk. ! forces it.
+
+    !transaction {
+        !from.balance <- !from.balance - amount;
+        !to.balance   <- !to.balance + amount
+    }
+
+    Without !:
+    transfer = transaction {
+        !from.balance <- !from.balance - amount;
+        !to.balance   <- !to.balance + amount
+    }
+    -- nothing happens yet, just a description
+    !transfer   -- now it runs atomically
+
     Atomic STM transaction.
     Either completes fully or retries from the start.
     No partial state visible to other transactions.
@@ -662,11 +787,6 @@ Transaction = '!' 'transaction' Block ;
     Ref inside transaction is automatically promoted to TRef.
     STM composes — transactions can call functions that
     are themselves transactional. Locks cannot do this.
-
-    !transaction {
-        from.balance <- !from.balance - amount;
-        to.balance   <- !to.balance + amount
-    }
 
     WHEN TO USE transaction vs on
     ─────────────────────────────
@@ -772,7 +892,7 @@ Unit        = '()' ;
    IDENTIFIERS
    ───────────────────────────────────────── *)
 
-Ident       = [a-z] [a-zA-Z0-9]* ;
+Ident       = [a-z_] [a-zA-Z0-9_]* ;
 TypeIdent   = [A-Z] [a-zA-Z0-9]* ;
 
 (*
@@ -782,6 +902,7 @@ TypeIdent   = [A-Z] [a-zA-Z0-9]* ;
 
     The parser uses this to distinguish type variables
     from concrete types without annotations.
+    _ is a valid identifier (wildcard in patterns, placeholder in pipes).
 *)
 
 
@@ -963,8 +1084,11 @@ TypeVar     = [a-z]+ ;
     from        import      export
     match       not         and
     or          xor         if
-    true        false       transaction
-    gen         on          use
+    true        false       on
+    use         comptime    transaction
+    gen
+
+    19 keywords.
 
     handle, catch, map, tap are dot methods on Effect, not keywords.
     all, race, fork are stdlib functions, not keywords.
@@ -989,7 +1113,7 @@ TypeVar     = [a-z]+ ;
     3.  Named functions in sugared form: f x = { }
     4.  Anonymous lambdas in explicit form: (x) -> { }
     5.  Multi-param lambdas fully curried: (a) -> { (b) -> { } }
-    6.  Chained mutations right-associated: a <- (b <- (c <- e))
+    6.  Chained mutations right-associated: !a <- (!b <- (!c <- e))
     7.  Chained unifications: x = y = e
     8.  Imports use braces: from M import { f, g }
     9.  Imports sorted alphabetically
@@ -998,6 +1122,7 @@ TypeVar     = [a-z]+ ;
     12. match arms each on their own line
     13. One operation per line in record type declarations
     14. Unit written as () in value position
+    15. All effectful expressions prefixed with !
 *)
 
 
@@ -1012,6 +1137,7 @@ TypeVar     = [a-z]+ ;
 
     x = expr                            const x = expr
     mut x = expr                        const x = yield* Ref.make(expr)
+    comptime x = expr                   const x = /* compile-time evaluated */
     x = y = expr                        const _e = expr
                                         const y = _e; const x = _e
     x : T                               const x: T
@@ -1020,12 +1146,13 @@ TypeVar     = [a-z]+ ;
     !e  (Promise)                       yield* Effect.promise(() => e)
     !e  (thunk)                         yield* Effect.sync(() => e())
     !e  (value)                         e
+    !comptime e                         /* evaluated at compile time */
 
     e.f                                 pipe(e, f)
     e.f x y                             pipe(e, f(x)(y))
 
-    x <- e                              yield* Ref.set(x, e)
-    a <- (b <- (c <- e))                yield* pipe(e,
+    !x <- e                             yield* Ref.set(x, e)
+    !a <- (!b <- (!c <- e))             yield* pipe(e,
                                             Effect.flatMap(v => Ref.set(c, v)),
                                             Effect.flatMap(v => Ref.set(b, v)),
                                             Effect.flatMap(v => Ref.set(a, v)))
@@ -1044,11 +1171,11 @@ TypeVar     = [a-z]+ ;
 
     gen { ... }                         Effect.gen(function* () { ... })
 
-    use x = f;                          yield* f((x) => Effect.gen(function* () {
+    !use x = f;                         yield* f((x) => Effect.gen(function* () {
     rest                                    rest
                                         }))
 
-    on source handler                   yield* subscribeToRef(source, handler)
+    !on source handler                  yield* subscribeToRef(source, handler)
 
     -- Concurrency (standard library):
     !all [e1, e2]                       yield* Effect.all([e1, e2],
@@ -1100,5 +1227,14 @@ TypeVar     = [a-z]+ ;
     map : <a, b> (a -> b) ->            const map = <A, B>(
         List a -> List b                  f: (a: A) => B, xs: List<A>
                                         ): List<B> => ...
+
+    -- Dropped constructs:
+    -- memo     → compiler optimization or force-and-bind
+    -- lazy     → everything is already lazy
+    -- defer    → use with stdlib wrappers
+    -- scoped   → use
+    -- forall   → implicit type variable quantification
+    -- where    → angle bracket constraints
+    -- effect   → types with channel classification
 *)
 ```
