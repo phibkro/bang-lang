@@ -71,27 +71,18 @@ Pragmatic (skip):
 v0.2 complete: blocks, lambdas, operators, string interpolation, grouped expressions.
 Next: interpreter (reference eval for compiler correctness testing).
 
-## Design Process
+## Correctness
 
-Every feature follows: **Discuss → Research → Spec → Plan → Implement → Review**.
-
-1. **Discuss** — brainstorm the feature, ask clarifying questions, propose 2-3 approaches
-2. **Research** — consult language spec, Effect repo, context7 docs, web search as needed
-3. **Spec** — write design doc to `docs/superpowers/specs/`, dispatch reviewer, iterate until approved
-4. **Plan** — write implementation plan to `docs/superpowers/plans/` with bite-sized tasks
-5. **Implement** — dispatch subagents per task, or inline execution. TDD. Effect conventions.
-6. **Review** — spec compliance review, then code quality review. Fix issues, re-review.
-
-Design decisions that affect the language go in `docs/language-spec.md` (EBNF).
-Design decisions that affect the compiler go in spec docs.
-Style decisions go in this file under Effect Style Rules.
-
-**Correctness approach** (from Bahr & Hutton "Calculating Correct Compilers"):
+Approach from Bahr & Hutton "Calculating Correct Compilers":
 - Reference interpreter (`eval`) defines ground truth semantics
 - Compiler correctness = `eval(ast) ≡ run(codegen(ast))`
 - Pretty-printer roundtrip = `eval(parse(print(ast))) ≡ eval(ast)`
 - Prefer correct-by-construction (types, structural invariants) over testing where possible
-- Property tests for algebraic laws; unit tests for specific behaviors
+
+Testing pyramid:
+- **Property tests** — algebraic laws (roundtrips, determinism, optimization equivalence). `it.prop` / `it.effect.prop` with `Arbitrary.make(Schema)`.
+- **Unit tests** — specific behaviors, edge cases, error conditions
+- **E2E tests** — full programs compiled and verified
 
 ## Specs & Plans
 
