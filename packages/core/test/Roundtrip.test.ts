@@ -29,8 +29,7 @@ const wrapInProgram = (expr: Ast.Expr): Ast.Program =>
     span: s,
   });
 
-const tryEval = (program: Ast.Program) =>
-  Effect.runSyncExit(Interpreter.evalProgram(program));
+const tryEval = (program: Ast.Program) => Effect.runSyncExit(Interpreter.evalProgram(program));
 
 const tryParse = (source: string) =>
   Effect.runSyncExit(

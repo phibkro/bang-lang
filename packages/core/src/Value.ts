@@ -6,6 +6,7 @@ export type Value = Data.TaggedEnum<{
   Num: { readonly value: number };
   Str: { readonly value: string };
   Bool: { readonly value: boolean };
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Data.TaggedEnum requires {} for no-field variants
   Unit: {};
   Closure: {
     readonly params: ReadonlyArray<string>;

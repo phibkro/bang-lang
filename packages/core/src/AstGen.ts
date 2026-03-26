@@ -13,9 +13,9 @@ const s = Span.empty;
 // Leaf generators (depth 0)
 // ---------------------------------------------------------------------------
 
-const genIntLiteral = fc.integer({ min: 0, max: 1000 }).map(
-  (n) => new Ast.IntLiteral({ value: n, span: s }),
-);
+const genIntLiteral = fc
+  .integer({ min: 0, max: 1000 })
+  .map((n) => new Ast.IntLiteral({ value: n, span: s }));
 
 const genStringLiteral = fc
   .stringOf(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz "), { minLength: 0, maxLength: 10 })
@@ -52,25 +52,20 @@ const genUnaryExpr = (depth: number) =>
     .map(([op, expr]) => new Ast.UnaryExpr({ op, expr, span: s }));
 
 const genDeclaration = (depth: number) =>
-  fc
-    .tuple(fc.constantFrom("x", "y", "z", "a", "b", "tmp"), genExpr(depth - 1))
-    .map(
-      ([name, value]) =>
-        new Ast.Declaration({
-          name,
-          mutable: false,
-          value,
-          typeAnnotation: Option.none(),
-          span: s,
-        }),
-    );
+  fc.tuple(fc.constantFrom("x", "y", "z", "a", "b", "tmp"), genExpr(depth - 1)).map(
+    ([name, value]) =>
+      new Ast.Declaration({
+        name,
+        mutable: false,
+        value,
+        typeAnnotation: Option.none(),
+        span: s,
+      }),
+  );
 
 const genBlock = (depth: number) =>
   fc
-    .tuple(
-      fc.array(genDeclaration(depth - 1), { minLength: 0, maxLength: 3 }),
-      genExpr(depth - 1),
-    )
+    .tuple(fc.array(genDeclaration(depth - 1), { minLength: 0, maxLength: 3 }), genExpr(depth - 1))
     .map(([stmts, expr]) => new Ast.Block({ statements: stmts, expr, span: s }));
 
 const genLambda = (depth: number) =>

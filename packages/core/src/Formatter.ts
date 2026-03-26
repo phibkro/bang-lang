@@ -52,11 +52,7 @@ const parenIfNonAtom = (e: Ast.Expr): Doc.Doc<never> => {
   return Doc.hcat([Doc.text("("), formatExpr(e), Doc.text(")")]);
 };
 
-const parenIfLowerPrec = (
-  child: Ast.Expr,
-  parentOp: string,
-  isRight: boolean,
-): Doc.Doc<never> => {
+const parenIfLowerPrec = (child: Ast.Expr, parentOp: string, isRight: boolean): Doc.Doc<never> => {
   const childDoc = formatExpr(child);
   if (child._tag === "BinaryExpr") {
     const childPrec = PREC[child.op] ?? 0;
@@ -96,9 +92,7 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
       Doc.hcat([formatExpr(e.object), Doc.text("."), Doc.text(e.field)]),
     ),
     Match.tag("Block", (e) => {
-      const stmtDocs = e.statements.map((s) =>
-        Doc.cat(formatTopLevelStmt(s), Doc.text(";")),
-      );
+      const stmtDocs = e.statements.map((s) => Doc.cat(formatTopLevelStmt(s), Doc.text(";")));
       const bodyParts = [...stmtDocs, formatExpr(e.expr)];
       const body = bodyParts.reduce((a, b) => Doc.catWithSoftLine(a, b));
       // Note: Doc.nest inside Doc.group triggers a flatten bug in @effect/printer.
