@@ -136,6 +136,7 @@ const isLowerAlpha = (ch: string): boolean => ch >= "a" && ch <= "z";
 const isUpperAlpha = (ch: string): boolean => ch >= "A" && ch <= "Z";
 const isDigit = (ch: string): boolean => ch >= "0" && ch <= "9";
 const isAlphaNum = (ch: string): boolean => isLowerAlpha(ch) || isUpperAlpha(ch) || isDigit(ch);
+const isIdentChar = (ch: string): boolean => isAlphaNum(ch) || ch === "_";
 
 // ---------------------------------------------------------------------------
 // Token recognizers
@@ -205,9 +206,9 @@ const recognizeNumber: Recognizer = (s) =>
 
 const recognizeLowerWord: Recognizer = (s) =>
   Option.flatMap(charAt(s), (ch) => {
-    if (!isLowerAlpha(ch)) return Option.none();
+    if (!isLowerAlpha(ch) && ch !== "_") return Option.none();
     const start = s;
-    const [value, s1] = consumeWhile(s, isAlphaNum);
+    const [value, s1] = consumeWhile(s, isIdentChar);
     const span = makeSpan(start, s1);
     if (value === "true") return Option.some([new BoolLit({ value: true, span }), s1] as const);
     if (value === "false") return Option.some([new BoolLit({ value: false, span }), s1] as const);
@@ -219,7 +220,7 @@ const recognizeUpperWord: Recognizer = (s) =>
   Option.flatMap(charAt(s), (ch) => {
     if (!isUpperAlpha(ch)) return Option.none();
     const start = s;
-    const [value, s1] = consumeWhile(s, isAlphaNum);
+    const [value, s1] = consumeWhile(s, isIdentChar);
     return Option.some([new TypeIdent({ value, span: makeSpan(start, s1) }), s1] as const);
   });
 

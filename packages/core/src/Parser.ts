@@ -183,10 +183,7 @@ const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl> =>
     ] as const;
   });
 
-const parseConstructor = (
-  s: ParseState,
-  typeParamNames: ReadonlySet<string>,
-): P<Ast.Constructor> =>
+const parseConstructor = (s: ParseState, typeParamNames: ReadonlySet<string>): P<Ast.Constructor> =>
   Effect.gen(function* () {
     const [nameTok, s1] = yield* expect(s, "TypeIdent");
     const ctorName = tokenValue(nameTok);
@@ -723,6 +720,10 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
       return [new Ast.UnitLiteral({ span: tokenSpan(tok) }), s1] as const;
     }
 
+    if (tag === "Keyword" && tokenValue(t) === "match") {
+      return yield* parseMatch(s);
+    }
+
     if (tag === "Delimiter" && tokenValue(t) === "{") {
       return yield* parseBlock(s);
     }
@@ -736,6 +737,152 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
     }
 
     return yield* fail(`Expected expression, got ${tokenDescription(t)}`, s);
+  });
+
+// ---------------------------------------------------------------------------
+// Match expression
+// ---------------------------------------------------------------------------
+
+const parseMatch = (s: ParseState): P<Ast.MatchExpr> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "match");
+    // Parse scrutinee at high precedence to avoid consuming `{`
+    const [scrutinee, s2] = yield* parseExprPrec(s1, PREC_APP + 1);
+    const [, s3] = yield* expect(s2, "Delimiter", "{");
+
+    // Parse arms separated by commas until `}`
+    const collectArms = (
+      arms: ReadonlyArray<Ast.Arm>,
+      st: ParseState,
+    ): P<ReadonlyArray<Ast.Arm>> =>
+      Effect.gen(function* () {
+        const isClose = yield* check(st, "Delimiter", "}");
+        if (isClose) return [arms, st] as const;
+        const [arm, st2] = yield* parseArm(st);
+        const newArms = [...arms, arm];
+        // Consume optional comma
+        const hasComma = yield* check(st2, "Delimiter", ",");
+        if (hasComma) {
+          const [, st3] = yield* advance(st2);
+          return yield* collectArms(newArms, st3);
+        }
+        return [newArms, st2] as const;
+      });
+
+    const [arms, s4] = yield* collectArms([], s3);
+    const [endTok, s5] = yield* expect(s4, "Delimiter", "}");
+    return [
+      new Ast.MatchExpr({
+        scrutinee,
+        arms: [...arms],
+        span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
+      }),
+      s5,
+    ] as const;
+  });
+
+const parseArm = (s: ParseState): P<Ast.Arm> =>
+  Effect.gen(function* () {
+    const [pattern, s1] = yield* parsePattern(s);
+    const [, s2] = yield* expect(s1, "Operator", "->");
+    const [body, s3] = yield* parseExpr(s2);
+    return [
+      new Ast.Arm({
+        pattern,
+        body,
+        span: Span.merge(pattern.span, body.span),
+      }),
+      s3,
+    ] as const;
+  });
+
+const isPatternTerminator = (t: Token): boolean => {
+  const tag = tokenTag(t);
+  if (tag === "Operator" && tokenValue(t) === "->") return true;
+  if (tag === "Delimiter") {
+    const v = tokenValue(t);
+    return v === "," || v === "}";
+  }
+  if (tag === "EOF") return true;
+  return false;
+};
+
+const parsePattern = (s: ParseState): P<Ast.Pattern> =>
+  Effect.gen(function* () {
+    const t = yield* peek(s);
+    const tag = tokenTag(t);
+
+    // Wildcard: _
+    if (tag === "Ident" && tokenValue(t) === "_") {
+      const [tok, s1] = yield* advance(s);
+      return [new Ast.WildcardPattern({ span: tokenSpan(tok) }), s1] as const;
+    }
+
+    // Constructor: TypeIdent followed by sub-patterns
+    if (tag === "TypeIdent") {
+      const [tok, s1] = yield* advance(s);
+      const ctorName = tokenValue(tok);
+      // Collect sub-patterns until we hit a terminator
+      const collectSubPatterns = (
+        pats: ReadonlyArray<Ast.Pattern>,
+        st: ParseState,
+      ): P<ReadonlyArray<Ast.Pattern>> =>
+        Effect.gen(function* () {
+          const atEnd = yield* isAtEnd(st);
+          if (atEnd) return [pats, st] as const;
+          const next = yield* peek(st);
+          if (isPatternTerminator(next)) return [pats, st] as const;
+          const [subPat, st2] = yield* parsePattern(st);
+          return yield* collectSubPatterns([...pats, subPat], st2);
+        });
+
+      const [subPatterns, s2] = yield* collectSubPatterns([], s1);
+      const endSpan =
+        subPatterns.length > 0
+          ? (subPatterns[subPatterns.length - 1] as Ast.Pattern).span
+          : tokenSpan(tok);
+      return [
+        new Ast.ConstructorPattern({
+          tag: ctorName,
+          patterns: [...subPatterns],
+          span: Span.merge(tokenSpan(tok), endSpan),
+        }),
+        s2,
+      ] as const;
+    }
+
+    // Literal patterns
+    if (tag === "IntLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.IntLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "FloatLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.FloatLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "StringLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.StringLiteral({ value: tokenValue(tok), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "BoolLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+
+    // Binding: lowercase Ident (not _)
+    if (tag === "Ident") {
+      const [tok, s1] = yield* advance(s);
+      return [
+        new Ast.BindingPattern({ name: tokenValue(tok), span: tokenSpan(tok) }),
+        s1,
+      ] as const;
+    }
+
+    return yield* fail(`Expected pattern, got ${tokenDescription(t)}`, s);
   });
 
 // ---------------------------------------------------------------------------
