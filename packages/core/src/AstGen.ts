@@ -34,6 +34,22 @@ const genIdent = fc
   .map((name) => new Ast.Ident({ name, span: s }));
 
 // ---------------------------------------------------------------------------
+// Pattern generators
+// ---------------------------------------------------------------------------
+
+const genPattern = (depth: number): fc.Arbitrary<Ast.Pattern> =>
+  depth <= 0
+    ? fc.oneof(
+        fc.constant(new Ast.WildcardPattern({ span: s })),
+        fc.constantFrom("x", "y", "z").map((name) => new Ast.BindingPattern({ name, span: s })),
+      )
+    : fc.oneof(
+        fc.constant(new Ast.WildcardPattern({ span: s })),
+        fc.constantFrom("x", "y", "z").map((name) => new Ast.BindingPattern({ name, span: s })),
+        genIntLiteral.map((lit) => new Ast.LiteralPattern({ value: lit, span: s })),
+      );
+
+// ---------------------------------------------------------------------------
 // Recursive generators
 // ---------------------------------------------------------------------------
 
@@ -63,6 +79,18 @@ const genDeclaration = (depth: number) =>
       }),
   );
 
+const genMutDeclaration = (depth: number) =>
+  fc.tuple(fc.constantFrom("x", "y", "z"), genExpr(depth - 1)).map(
+    ([name, value]) =>
+      new Ast.Declaration({
+        name,
+        mutable: true,
+        value,
+        typeAnnotation: Option.none(),
+        span: s,
+      }),
+  );
+
 const genBlock = (depth: number) =>
   fc
     .tuple(fc.array(genDeclaration(depth - 1), { minLength: 0, maxLength: 3 }), genExpr(depth - 1))
@@ -83,6 +111,20 @@ const genLambda = (depth: number) =>
         }),
     );
 
+const genMatchExpr = (depth: number) =>
+  fc
+    .tuple(
+      // Use atom-like scrutinees to ensure correct parsing at high precedence
+      fc.oneof(genIntLiteral, genBoolLiteral, genIdent),
+      fc.array(
+        fc
+          .tuple(genPattern(0), genExpr(depth - 1))
+          .map(([pat, body]) => new Ast.Arm({ pattern: pat, body, span: s })),
+        { minLength: 1, maxLength: 3 },
+      ),
+    )
+    .map(([scrutinee, arms]) => new Ast.MatchExpr({ scrutinee, arms, span: s }));
+
 // ---------------------------------------------------------------------------
 // Composite expression generator
 // ---------------------------------------------------------------------------
@@ -99,6 +141,7 @@ export const genExpr = (depth: number): fc.Arbitrary<Ast.Expr> =>
         genUnaryExpr(depth),
         genBlock(depth),
         genLambda(depth),
+        genMatchExpr(depth),
       );
 
 // ---------------------------------------------------------------------------
@@ -122,7 +165,10 @@ export const genTypeDecl = fc
 
 export const genProgram = (depth: number): fc.Arbitrary<Ast.Program> =>
   fc
-    .array(genDeclaration(depth), { minLength: 1, maxLength: 5 })
+    .array(fc.oneof(genDeclaration(depth), genMutDeclaration(depth)), {
+      minLength: 1,
+      maxLength: 5,
+    })
     .map((stmts) => new Ast.Program({ statements: stmts, span: s }));
 
 // ---------------------------------------------------------------------------
