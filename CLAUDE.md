@@ -68,21 +68,41 @@ Pragmatic (skip):
 
 ## Status
 
-v0.2 complete: blocks, lambdas, operators, string interpolation, grouped expressions.
-Next: interpreter (reference eval for compiler correctness testing).
+v0.2 compiler + interpreter complete.
+Next: pretty-printer (AST → Bang source, enables roundtrip testing).
+
+## Design Process
+
+**The interpreter is the spec.** It defines what Bang programs mean. When semantics are ambiguous, the interpreter resolves it — it has to produce a value.
+
+**The compiler is an optimization of the interpreter.** Codegen translates semantics to Effect TS. It doesn't define behavior. If the compiler disagrees with the interpreter, the compiler is wrong.
+
+**New features flow through a pipeline:**
+
+```
+Language spec (what it means, in docs/language-spec.md)
+  → Interpreter (executable semantics, ground truth)
+  → Compiler (optimized translation to Effect TS)
+  → Property test (they agree)
+```
+
+Don't add a feature to the compiler without adding it to the interpreter first. Get semantics right in the simpler system, then translate.
 
 ## Correctness
 
-Approach from Bahr & Hutton "Calculating Correct Compilers":
-- Reference interpreter (`eval`) defines ground truth semantics
-- Compiler correctness = `eval(ast) ≡ run(codegen(ast))`
-- Pretty-printer roundtrip = `eval(parse(print(ast))) ≡ eval(ast)`
-- Prefer correct-by-construction (types, structural invariants) over testing where possible
+Three layers, ordered by cost-effectiveness:
 
-Testing pyramid:
-- **Property tests** — algebraic laws (roundtrips, determinism, optimization equivalence). `it.prop` / `it.effect.prop` with `Arbitrary.make(Schema)`.
-- **Unit tests** — specific behaviors, edge cases, error conditions
-- **E2E tests** — full programs compiled and verified
+1. **Types** — Make illegal states unrepresentable. Schema.TaggedClass, Match.exhaustive, Span as {start, end} not 6 fields. Prevent entire bug classes with zero tests.
+
+2. **Property tests** — Algebraic laws that hold for all inputs. `eval(Block([], e)) ≡ eval(e)`. Determinism. Lambda application matches direct computation. Catch systematic bugs. Use `it.prop` / `it.effect.prop`.
+
+3. **Unit/E2E tests** — Specific behaviors and edge cases. Division by zero. Undeclared variables. Full program compilation. Catch individual bugs.
+
+**Correctness equation** (Bahr & Hutton "Calculating Correct Compilers"):
+```
+eval(ast) ≡ run(codegen(ast))     -- compiler correctness
+eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
+```
 
 ## Specs & Plans
 
