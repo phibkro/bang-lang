@@ -9,16 +9,13 @@ import {
   Closure,
   Tagged,
   Constructor,
+  MutCell,
   EvalError,
   coerceToString,
   type Value,
 } from "./Value.js";
 
-const matchPattern = (
-  pattern: Ast.Pattern,
-  value: Value,
-  env: Env,
-): Option.Option<Env> =>
+const matchPattern = (pattern: Ast.Pattern, value: Value, env: Env): Option.Option<Env> =>
   Match.value(pattern).pipe(
     Match.tag("WildcardPattern", () => Option.some(env)),
     Match.tag("BindingPattern", (p) => Option.some(HashMap.set(env, p.name, value))),
@@ -38,11 +35,7 @@ const matchPattern = (
         return Option.some(env);
       if (p.value._tag === "FloatLiteral" && value._tag === "Num" && value.value === p.value.value)
         return Option.some(env);
-      if (
-        p.value._tag === "StringLiteral" &&
-        value._tag === "Str" &&
-        value.value === p.value.value
-      )
+      if (p.value._tag === "StringLiteral" && value._tag === "Str" && value.value === p.value.value)
         return Option.some(env);
       if (p.value._tag === "BoolLiteral" && value._tag === "Bool" && value.value === p.value.value)
         return Option.some(env);
@@ -70,7 +63,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
               span: e.span,
             }),
           ),
-        onSome: Effect.succeed,
+        onSome: (v) => Effect.succeed(v._tag === "MutCell" ? v.ref.value : v),
       }),
     ),
     Match.tag("BinaryExpr", (e) =>
@@ -172,6 +165,9 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
     Match.tag("Declaration", (s) =>
       Effect.gen(function* () {
         const value = yield* evalExpr(s.value, env);
+        if (s.mutable) {
+          return HashMap.set(env, s.name, MutCell({ ref: { value } }));
+        }
         return HashMap.set(env, s.name, value);
       }),
     ),
@@ -215,7 +211,25 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
       ),
     ),
     Match.tag("Mutation", (s) =>
-      Effect.fail(new EvalError({ message: "Mutation not yet implemented", span: s.span })),
+      Effect.gen(function* () {
+        const cell = HashMap.get(env, s.target);
+        if (Option.isNone(cell)) {
+          return yield* Effect.fail(
+            new EvalError({ message: `Undefined variable: ${s.target}`, span: s.span }),
+          );
+        }
+        if (cell.value._tag !== "MutCell") {
+          return yield* Effect.fail(
+            new EvalError({
+              message: `Cannot mutate non-mutable binding: ${s.target}`,
+              span: s.span,
+            }),
+          );
+        }
+        const newValue = yield* evalExpr(s.value, env);
+        cell.value.ref.value = newValue;
+        return env;
+      }),
     ),
     Match.tag("Import", (s) =>
       Effect.fail(new EvalError({ message: "Import not yet implemented", span: s.span })),
@@ -382,7 +396,11 @@ export const evalProgram = (program: Ast.Program): Effect.Effect<Value, EvalErro
     for (const stmt of program.statements) {
       if (stmt._tag === "Declaration") {
         const val = yield* evalExpr(stmt.value, env);
-        env = HashMap.set(env, stmt.name, val);
+        if (stmt.mutable) {
+          env = HashMap.set(env, stmt.name, MutCell({ ref: { value: val } }));
+        } else {
+          env = HashMap.set(env, stmt.name, val);
+        }
         lastValue = val;
       } else if (stmt._tag === "Declare") {
         lastValue = Unit();

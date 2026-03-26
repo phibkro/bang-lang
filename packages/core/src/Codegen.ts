@@ -153,18 +153,25 @@ const collectDeclaredNames = (statements: ReadonlyArray<TypedAst.TypedStmt>): De
 // Block statement emission (pure string, no WriterState)
 // ---------------------------------------------------------------------------
 
-const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap): string =>
+const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap, mutNames: ReadonlySet<string>): string =>
   Match.value(stmt).pipe(
-    Match.tag("Declaration", (s) => `const ${s.name} = ${emitExpr(s.value, decls)}`),
+    Match.tag("Declaration", (s) =>
+      s.mutable
+        ? `const ${s.name} = yield* Ref.make(${emitExpr(s.value, decls, mutNames)})`
+        : `const ${s.name} = ${emitExpr(s.value, decls, mutNames)}`,
+    ),
     Match.tag("ForceStatement", (s) =>
       s.expr._tag === "Force"
-        ? `yield* ${emitExpr(s.expr.expr, decls)}`
-        : `yield* ${emitExpr(s.expr, decls)}`,
+        ? `yield* ${emitExpr(s.expr.expr, decls, mutNames)}`
+        : `yield* ${emitExpr(s.expr, decls, mutNames)}`,
     ),
-    Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls)),
+    Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls, mutNames)),
     Match.tag("Declare", () => ""),
     Match.tag("TypeDecl", () => ""),
-    Match.tag("Mutation", () => ""),
+    Match.tag(
+      "Mutation",
+      (s) => `yield* Ref.set(${s.target}, ${emitExpr(s.value, decls, mutNames)})`,
+    ),
     Match.tag("Import", () => ""),
     Match.tag("Export", () => ""),
     Match.exhaustive,
@@ -174,42 +181,46 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap): string =>
 // Expression emission (pure string building)
 // ---------------------------------------------------------------------------
 
-const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
+const emitExpr = (
+  expr: Ast.Expr,
+  decls: DeclMap,
+  mutNames: ReadonlySet<string> = new Set(),
+): string =>
   Match.value(expr).pipe(
     Match.tag("StringLiteral", (e) => `"${e.value}"`),
     Match.tag("IntLiteral", (e) => String(e.value)),
     Match.tag("BoolLiteral", (e) => String(e.value)),
     Match.tag("UnitLiteral", () => "undefined"),
-    Match.tag("Ident", (e) => e.name),
+    Match.tag("Ident", (e) => (mutNames.has(e.name) ? `yield* Ref.get(${e.name})` : e.name)),
     Match.tag("DotAccess", (e) =>
       Option.match(buildDottedName(e), {
-        onNone: () => `${emitExpr(e.object, decls)}.${e.field}`,
+        onNone: () => `${emitExpr(e.object, decls, mutNames)}.${e.field}`,
         onSome: (name) =>
           Option.match(HashMap.get(decls, name), {
-            onNone: () => `${emitExpr(e.object, decls)}.${e.field}`,
+            onNone: () => `${emitExpr(e.object, decls, mutNames)}.${e.field}`,
             onSome: (info) => info.wrapperName,
           }),
       }),
     ),
     Match.tag("App", (e) => {
-      const funcCode = emitExpr(e.func, decls);
+      const funcCode = emitExpr(e.func, decls, mutNames);
       // Check if the function is a declared wrapper (use comma-separated args)
       const dottedName = buildDottedName(e.func);
       const isDeclared = Option.isSome(Option.flatMap(dottedName, (n) => HashMap.get(decls, n)));
       if (isDeclared) {
-        const args = Arr.map(e.args, (a) => emitExpr(a, decls)).join(", ");
+        const args = Arr.map(e.args, (a) => emitExpr(a, decls, mutNames)).join(", ");
         return `${funcCode}(${args})`;
       }
       // User-defined: curried application
-      return Arr.reduce(e.args, funcCode, (fn, arg) => `${fn}(${emitExpr(arg, decls)})`);
+      return Arr.reduce(e.args, funcCode, (fn, arg) => `${fn}(${emitExpr(arg, decls, mutNames)})`);
     }),
-    Match.tag("Force", (e) => `yield* ${emitExpr(e.expr, decls)}`),
+    Match.tag("Force", (e) => `yield* ${emitExpr(e.expr, decls, mutNames)}`),
     Match.tag("FloatLiteral", (e) => String(e.value)),
     Match.tag("BinaryExpr", (e) => {
       const op = mapBinaryOp(e.op);
       const prec = jsPrecOf(op);
-      const leftCode = emitExpr(e.left, decls);
-      const rightCode = emitExpr(e.right, decls);
+      const leftCode = emitExpr(e.left, decls, mutNames);
+      const rightCode = emitExpr(e.right, decls, mutNames);
       const left =
         e.left._tag === "BinaryExpr" && jsPrecOf(mapBinaryOp(e.left.op)) < prec
           ? `(${leftCode})`
@@ -222,34 +233,41 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
     }),
     Match.tag("UnaryExpr", (e) => {
       const op = mapUnaryOp(e.op);
-      return `${op}${emitExpr(e.expr, decls)}`;
+      return `${op}${emitExpr(e.expr, decls, mutNames)}`;
     }),
     Match.tag("Block", (e) => {
+      // Collect mut names from block statements
+      const blockMutNames = new Set(mutNames);
+      for (const stmt of e.statements) {
+        if (stmt._tag === "Declaration" && stmt.mutable) {
+          blockMutNames.add(stmt.name);
+        }
+      }
       if (e.statements.length === 0) {
-        return emitExpr(e.expr, decls);
+        return emitExpr(e.expr, decls, blockMutNames);
       }
       const stmtLines = e.statements.map((stmt) => {
-        const line = emitBlockStmt(stmt, decls);
+        const line = emitBlockStmt(stmt, decls, blockMutNames);
         return `  ${line}`;
       });
-      const returnLine = `  return ${emitExpr(e.expr, decls)}`;
+      const returnLine = `  return ${emitExpr(e.expr, decls, blockMutNames)}`;
       const body = [...stmtLines, returnLine].join("\n");
       return `Effect.gen(function*() {\n${body}\n})`;
     }),
     Match.tag("Lambda", (e) => {
-      const bodyCode = emitExpr(e.body, decls);
+      const bodyCode = emitExpr(e.body, decls, mutNames);
       return Arr.reduceRight(e.params, bodyCode, (inner, param) => `(${param}) => ${inner}`);
     }),
     Match.tag("StringInterp", (e) => {
       const inner = e.parts
         .map((part) =>
-          part._tag === "InterpText" ? part.value : `\${${emitExpr(part.value, decls)}}`,
+          part._tag === "InterpText" ? part.value : `\${${emitExpr(part.value, decls, mutNames)}}`,
         )
         .join("");
       return `\`${inner}\``;
     }),
     Match.tag("MatchExpr", (e) => {
-      const scrutinee = emitExpr(e.scrutinee, decls);
+      const scrutinee = emitExpr(e.scrutinee, decls, mutNames);
       const arms = e.arms;
       const lastArm = arms[arms.length - 1];
       const lastIsWildcard = lastArm?.pattern._tag === "WildcardPattern";
@@ -266,7 +284,7 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
       for (let i = 0; i < arms.length; i++) {
         const arm = arms[i];
         const isLast = i === arms.length - 1;
-        const body = emitExpr(arm.body, decls);
+        const body = emitExpr(arm.body, decls, mutNames);
 
         if (isLast && (lastIsWildcard || lastIsBinding)) {
           // Last arm is wildcard or binding — use orElse
@@ -287,7 +305,7 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
             parts.push(`Match.tag("${pat.tag}", ({ ${bindings.join(", ")} }) => ${body})`);
           }
         } else if (arm.pattern._tag === "LiteralPattern") {
-          const litVal = emitExpr(arm.pattern.value, decls);
+          const litVal = emitExpr(arm.pattern.value, decls, mutNames);
           parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
         } else if (arm.pattern._tag === "BindingPattern") {
           // Non-last binding pattern — use Match.when that always matches
@@ -312,22 +330,33 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
 // Statement emission (returns new WriterState)
 // ---------------------------------------------------------------------------
 
-const emitStatement = (w: WriterState, stmt: TypedAst.TypedStmt, decls: DeclMap): WriterState =>
+const emitStatement = (
+  w: WriterState,
+  stmt: TypedAst.TypedStmt,
+  decls: DeclMap,
+  mutNames: ReadonlySet<string>,
+): WriterState =>
   Match.value(stmt.node).pipe(
     Match.tag("Declaration", (node) => {
       const w1 = recordMapping(w, node.span);
-      return writeLine(w1, `const ${node.name} = ${emitExpr(node.value, decls)}`);
+      if (node.mutable) {
+        return writeLine(
+          w1,
+          `const ${node.name} = yield* Ref.make(${emitExpr(node.value, decls, mutNames)})`,
+        );
+      }
+      return writeLine(w1, `const ${node.name} = ${emitExpr(node.value, decls, mutNames)}`);
     }),
     Match.tag("ForceStatement", (node) => {
       const w1 = recordMapping(w, node.span);
       if (node.expr._tag === "Force") {
-        return writeLine(w1, `yield* ${emitExpr(node.expr.expr, decls)}`);
+        return writeLine(w1, `yield* ${emitExpr(node.expr.expr, decls, mutNames)}`);
       }
-      return writeLine(w1, `yield* ${emitExpr(node.expr, decls)}`);
+      return writeLine(w1, `yield* ${emitExpr(node.expr, decls, mutNames)}`);
     }),
     Match.tag("ExprStatement", (node) => {
       const w1 = recordMapping(w, node.span);
-      return writeLine(w1, emitExpr(node.expr, decls));
+      return writeLine(w1, emitExpr(node.expr, decls, mutNames));
     }),
     Match.tag("Declare", () => w), // already handled in wrapper generation
     Match.tag("TypeDecl", (node) => {
@@ -349,7 +378,13 @@ const emitStatement = (w: WriterState, stmt: TypedAst.TypedStmt, decls: DeclMap)
       );
       return lines.reduce((acc, line) => writeLine(acc, line), w1);
     }),
-    Match.tag("Mutation", () => w),
+    Match.tag("Mutation", (node) => {
+      const w1 = recordMapping(w, node.span);
+      return writeLine(
+        w1,
+        `yield* Ref.set(${node.target}, ${emitExpr(node.value, decls, mutNames)})`,
+      );
+    }),
     Match.tag("Import", () => w),
     Match.tag("Export", () => w),
     Match.exhaustive,
@@ -387,12 +422,25 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const hasForce = Arr.some(program.statements, (s) => s.node._tag === "ForceStatement");
   const hasTypeDecl = Arr.some(program.statements, (s) => s.node._tag === "TypeDecl");
   const hasMatch = Arr.some(program.statements, (s) => stmtContainsMatch(s.node));
-  const needsEffectImport = HashMap.size(decls) > 0 || hasForce;
+  const hasMut = Arr.some(
+    program.statements,
+    (s) => (s.node._tag === "Declaration" && s.node.mutable) || s.node._tag === "Mutation",
+  );
+  const needsEffectImport = HashMap.size(decls) > 0 || hasForce || hasMut;
   const needsDataImport = hasTypeDecl;
+
+  // Collect mutable binding names for Ref.get emission
+  const mutNames = new Set<string>();
+  for (const s of program.statements) {
+    if (s.node._tag === "Declaration" && s.node.mutable) {
+      mutNames.add(s.node.name);
+    }
+  }
 
   // Start building output
   const imports: string[] = [];
   if (needsEffectImport) imports.push("Effect");
+  if (hasMut) imports.push("Ref");
   if (needsDataImport) imports.push("Data");
   if (hasMatch) imports.push("Match");
   const w0 =
@@ -426,16 +474,16 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   // Filter non-declare statements
   const bodyStmts = Arr.filter(program.statements, (s) => s.node._tag !== "Declare");
 
-  if (hasForce) {
+  if (hasForce || hasMut) {
     // Wrap in Effect.gen + runPromise
     const w2 = pushIndent(writeLine(w1, "const main = Effect.gen(function*() {"));
-    const w3 = Arr.reduce(bodyStmts, w2, (w, stmt) => emitStatement(w, stmt, decls));
+    const w3 = Arr.reduce(bodyStmts, w2, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
     const w4 = writeLine(popIndent(w3), "})");
     const w5 = writeLine(writeBlankLine(w4), "Effect.runPromise(main)");
     return { code: writerToString(w5), sourceMap: w5.sourceMap };
   }
 
-  const w2 = Arr.reduce(bodyStmts, w1, (w, stmt) => emitStatement(w, stmt, decls));
+  const w2 = Arr.reduce(bodyStmts, w1, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
   return { code: writerToString(w2), sourceMap: w2.sourceMap };
 };
 

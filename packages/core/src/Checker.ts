@@ -14,6 +14,7 @@ interface ScopeEntry {
   readonly name: string;
   readonly type: Option.Option<Ast.Type>;
   readonly effectClass: "signal" | "effect";
+  readonly mutable: boolean;
 }
 
 type Scope = HashMap.HashMap<string, ScopeEntry>;
@@ -80,6 +81,7 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
           name: s.name,
           type: Option.some(s.typeAnnotation),
           effectClass: returnsEffect(s.typeAnnotation) ? ("effect" as const) : ("signal" as const),
+          mutable: false,
         }),
       ),
       Match.tag("Declaration", (s) =>
@@ -87,6 +89,7 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
           name: s.name,
           type: s.typeAnnotation,
           effectClass: classifyExpr(s.value, acc),
+          mutable: s.mutable,
         }),
       ),
       Match.tag("TypeDecl", (s) =>
@@ -101,6 +104,7 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
             name: ctorTag,
             type: Option.none(),
             effectClass: "signal" as const,
+            mutable: false,
           });
         }),
       ),
@@ -161,7 +165,12 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
     Match.tag("Lambda", (e) => {
       // Create child scope with params bound as signal-typed
       const paramScope = Arr.reduce(e.params, scope, (acc, p) =>
-        HashMap.set(acc, p, { name: p, type: Option.none(), effectClass: "signal" as const }),
+        HashMap.set(acc, p, {
+          name: p,
+          type: Option.none(),
+          effectClass: "signal" as const,
+          mutable: false,
+        }),
       );
       // Lambda itself is always signal (it's a value); classify body for internal use
       classifyExpr(e.body, paramScope);
@@ -184,6 +193,7 @@ const bindPatternNames = (pat: Ast.Pattern, scope: Scope): Scope =>
         name: p.name,
         type: Option.none(),
         effectClass: "signal" as const,
+        mutable: false,
       }),
     ),
     Match.tag("ConstructorPattern", (p) =>
@@ -243,7 +253,12 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     ),
     Match.tag("Lambda", (e) => {
       const paramScope = Arr.reduce(e.params, scope, (acc, p) =>
-        HashMap.set(acc, p, { name: p, type: Option.none(), effectClass: "signal" as const }),
+        HashMap.set(acc, p, {
+          name: p,
+          type: Option.none(),
+          effectClass: "signal" as const,
+          mutable: false,
+        }),
       );
       return validateExprScope(e.body, paramScope);
     }),
@@ -335,7 +350,27 @@ const checkStmt = (
       Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
     ),
     Match.tag("Mutation", (s) =>
-      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+      Effect.gen(function* () {
+        yield* validateExprScope(s.value, scope);
+        const entry = lookupScope(scope, s.target);
+        if (Option.isNone(entry)) {
+          return yield* Effect.fail(
+            new CheckError({
+              message: `Undeclared identifier: ${s.target}`,
+              span: s.span,
+            }),
+          );
+        }
+        if (!entry.value.mutable) {
+          return yield* Effect.fail(
+            new CheckError({
+              message: `Cannot mutate non-mutable binding: ${s.target}`,
+              span: s.span,
+            }),
+          );
+        }
+        return annotate(s, { type: unknownType, effectClass: "signal" as const });
+      }),
     ),
     Match.tag("Import", (s) =>
       Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),

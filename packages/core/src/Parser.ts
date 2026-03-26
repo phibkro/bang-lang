@@ -293,14 +293,16 @@ const parseStatement = (s: ParseState): P<Ast.Stmt> =>
 
     if (tokenTag(t) === "Keyword" && tokenValue(t) === "declare") return yield* parseDeclare(s);
     if (tokenTag(t) === "Keyword" && tokenValue(t) === "type") return yield* parseTypeDecl(s);
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "mut") return yield* parseMutDeclaration(s);
     if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return yield* parseForceStatement(s);
     if (tokenTag(t) === "Ident") {
       return yield* Option.match(peekAt(s, 1), {
         onNone: () => parseExprStatement(s),
-        onSome: (next) =>
-          tokenTag(next) === "Operator" && tokenValue(next) === "="
-            ? parseDeclaration(s)
-            : parseExprStatement(s),
+        onSome: (next) => {
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "=") return parseDeclaration(s);
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "<-") return parseMutation(s);
+          return parseExprStatement(s);
+        },
       });
     }
 
@@ -365,6 +367,47 @@ const parseDeclaration = (s: ParseState): P<Ast.Declaration> =>
   });
 
 // ---------------------------------------------------------------------------
+// Mut declaration
+// ---------------------------------------------------------------------------
+
+const parseMutDeclaration = (s: ParseState): P<Ast.Declaration> =>
+  Effect.gen(function* () {
+    const [mutTok, s1] = yield* expect(s, "Keyword", "mut");
+    const [nameTok, s2] = yield* expect(s1, "Ident");
+    const [, s3] = yield* expect(s2, "Operator", "=");
+    const [value, s4] = yield* parseExpr(s3);
+    return [
+      new Ast.Declaration({
+        name: tokenValue(nameTok),
+        mutable: true,
+        value,
+        typeAnnotation: Option.none(),
+        span: Span.merge(tokenSpan(mutTok), value.span),
+      }),
+      s4,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
+// Mutation statement
+// ---------------------------------------------------------------------------
+
+const parseMutation = (s: ParseState): P<Ast.Mutation> =>
+  Effect.gen(function* () {
+    const [nameTok, s1] = yield* expect(s, "Ident");
+    const [, s2] = yield* expect(s1, "Operator", "<-");
+    const [value, s3] = yield* parseExpr(s2);
+    return [
+      new Ast.Mutation({
+        target: tokenValue(nameTok),
+        value,
+        span: Span.merge(tokenSpan(nameTok), value.span),
+      }),
+      s3,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
 // Force statement
 // ---------------------------------------------------------------------------
 
@@ -393,7 +436,6 @@ const parseExprStatement = (s: ParseState): P<Ast.ExprStatement> =>
 // Expressions — Pratt parser (precedence climbing)
 // ---------------------------------------------------------------------------
 
-const PREC_MUT = 1;
 const PREC_XOR = 4;
 const PREC_OR = 5;
 const PREC_AND = 6;
@@ -404,7 +446,6 @@ const PREC_UNARY = 10;
 const PREC_APP = 11;
 
 const BINARY_PREC: Record<string, number> = {
-  "<-": PREC_MUT,
   xor: PREC_XOR,
   or: PREC_OR,
   and: PREC_AND,
@@ -422,7 +463,7 @@ const BINARY_PREC: Record<string, number> = {
   "%": PREC_MUL,
 };
 
-const RIGHT_ASSOC = new Set(["<-"]);
+const RIGHT_ASSOC = new Set<string>();
 
 const getBinaryPrec = (t: Token): number | undefined => {
   const tag = tokenTag(t);
@@ -751,10 +792,7 @@ const parseMatch = (s: ParseState): P<Ast.MatchExpr> =>
     const [, s3] = yield* expect(s2, "Delimiter", "{");
 
     // Parse arms separated by commas until `}`
-    const collectArms = (
-      arms: ReadonlyArray<Ast.Arm>,
-      st: ParseState,
-    ): P<ReadonlyArray<Ast.Arm>> =>
+    const collectArms = (arms: ReadonlyArray<Ast.Arm>, st: ParseState): P<ReadonlyArray<Ast.Arm>> =>
       Effect.gen(function* () {
         const isClose = yield* check(st, "Delimiter", "}");
         if (isClose) return [arms, st] as const;
@@ -876,10 +914,7 @@ const parsePattern = (s: ParseState): P<Ast.Pattern> =>
     // Binding: lowercase Ident (not _)
     if (tag === "Ident") {
       const [tok, s1] = yield* advance(s);
-      return [
-        new Ast.BindingPattern({ name: tokenValue(tok), span: tokenSpan(tok) }),
-        s1,
-      ] as const;
+      return [new Ast.BindingPattern({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
     }
 
     return yield* fail(`Expected pattern, got ${tokenDescription(t)}`, s);
@@ -931,14 +966,16 @@ const parseBlockItem = (s: ParseState): P<Ast.Stmt> =>
   Effect.gen(function* () {
     const t = yield* peek(s);
 
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "mut") return yield* parseMutDeclaration(s);
     if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return yield* parseForceStatement(s);
     if (tokenTag(t) === "Ident") {
       return yield* Option.match(peekAt(s, 1), {
         onNone: () => parseExprStatement(s),
-        onSome: (next) =>
-          tokenTag(next) === "Operator" && tokenValue(next) === "="
-            ? parseDeclaration(s)
-            : parseExprStatement(s),
+        onSome: (next) => {
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "=") return parseDeclaration(s);
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "<-") return parseMutation(s);
+          return parseExprStatement(s);
+        },
       });
     }
 
