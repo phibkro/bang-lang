@@ -1,6 +1,6 @@
 import { Effect, HashMap, Match, Option } from "effect";
 import type * as Ast from "./Ast.js";
-import { Num, Str, Bool, Unit, Closure, EvalError, type Value } from "./Value.js";
+import { Num, Str, Bool, Unit, Closure, EvalError, coerceToString, type Value } from "./Value.js";
 
 type Env = HashMap.HashMap<string, Value>;
 
@@ -83,13 +83,20 @@ export const evalExpr = (
         return yield* applyClosure(func, args, e.span);
       }),
     ),
-    Match.tag("StringInterp", () =>
-      Effect.fail(
-        new EvalError({
-          message: "Not yet implemented: StringInterp",
-          span: expr.span,
-        }),
-      ),
+    Match.tag("StringInterp", (e) =>
+      Effect.gen(function* () {
+        const parts: string[] = [];
+        for (const part of e.parts) {
+          if (part._tag === "InterpText") {
+            parts.push(part.value);
+          } else {
+            const val = yield* evalExpr(part.value, env);
+            const str = yield* coerceToString(val);
+            parts.push(str);
+          }
+        }
+        return Str({ value: parts.join("") });
+      }),
     ),
     Match.exhaustive,
   );
@@ -298,3 +305,27 @@ const applyUnaryOp = (
     new EvalError({ message: `Unknown unary operator: ${op}`, span }),
   );
 };
+
+export const evalProgram = (
+  program: Ast.Program,
+): Effect.Effect<Value, EvalError> =>
+  Effect.gen(function* () {
+    let env: Env = HashMap.empty();
+    let lastValue: Value = Unit();
+
+    for (const stmt of program.statements) {
+      if (stmt._tag === "Declaration") {
+        const val = yield* evalExpr(stmt.value, env);
+        env = HashMap.set(env, stmt.name, val);
+        lastValue = val;
+      } else if (stmt._tag === "Declare") {
+        // no-op
+      } else if (stmt._tag === "ForceStatement") {
+        lastValue = yield* evalExpr(stmt.expr, env);
+      } else if (stmt._tag === "ExprStatement") {
+        lastValue = yield* evalExpr(stmt.expr, env);
+      }
+    }
+
+    return lastValue;
+  });

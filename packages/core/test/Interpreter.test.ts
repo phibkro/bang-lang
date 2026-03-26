@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, HashMap, Option } from "effect";
 import * as Ast from "@bang/core/Ast";
 import * as Span from "@bang/core/Span";
-import { Interpreter, Value } from "@bang/core";
+import { Interpreter, Lexer, Parser, Value } from "@bang/core";
 
 const s = Span.empty;
 const emptyEnv = HashMap.empty<string, Value.Value>();
@@ -415,6 +415,40 @@ describe("Interpreter", () => {
         Effect.either,
       );
       expect(result._tag).toBe("Left");
+    }),
+  );
+
+  it.effect("evaluates string interpolation", () =>
+    Effect.gen(function* () {
+      const env = HashMap.set(emptyEnv, "name", Value.Str({ value: "world" }));
+      const interp = new Ast.StringInterp({
+        parts: [
+          new Ast.InterpText({ value: "hello " }),
+          new Ast.InterpExpr({ value: new Ast.Ident({ name: "name", span: s }) }),
+        ],
+        span: s,
+      });
+      const result = yield* Interpreter.evalExpr(interp, env);
+      expect(result).toEqual(Value.Str({ value: "hello world" }));
+    }),
+  );
+
+  it.effect("evaluates a program via evalProgram", () =>
+    Effect.gen(function* () {
+      const tokens = yield* Lexer.tokenize("result = 1 + 2");
+      const ast = yield* Parser.parse(tokens);
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Num({ value: 3 }));
+    }),
+  );
+
+  it.effect("evalProgram with lambda and application", () =>
+    Effect.gen(function* () {
+      const source = "add = a b -> { a + b }\nresult = add 3 4";
+      const tokens = yield* Lexer.tokenize(source);
+      const ast = yield* Parser.parse(tokens);
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Num({ value: 7 }));
     }),
   );
 });
