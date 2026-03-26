@@ -35,7 +35,7 @@ The spec defines 14 rules. We implement the ones relevant to v0.2 features:
 | 2 | Braces around all block bodies | `toDoc` always emits `{ }` for blocks |
 | 6 | Single space around binary operators | `Doc.catWithSpace` around operator |
 | 7 | Single space after keywords | `Doc.catWithSpace` after `declare`, etc. |
-| 8 | Newline after `{` and before `}` | `Doc.hardLine` (or `Doc.line` inside `group` for short blocks) |
+| 8 | Newline after `{` and before `}` when block breaks; space-padded when flat | `Doc.line` inside `Doc.group` — resolves to space when flat, newline when broken |
 | 9 | Two-space indentation inside blocks | `Doc.nest(2, ...)` |
 | 12 | Unit is `()` in value position | `Doc.text("()")` for UnitLiteral |
 
@@ -48,7 +48,7 @@ Deferred (features not yet implemented): 3 (lambda params — bare Haskell-style
 ```
 IntLiteral(n)     → text(String(n))
 FloatLiteral(n)   → text(String(n))
-StringLiteral(s)  → text('"' + escape(s) + '"')
+StringLiteral(s)  → text('"' + escape(s) + '"')   -- see escape rules below
 BoolLiteral(b)    → text(String(b))
 UnitLiteral       → text("()")
 StringInterp(ps)  → text('"') + parts + text('"')
@@ -56,17 +56,19 @@ StringInterp(ps)  → text('"') + parts + text('"')
         InterpExpr → text("${") + toDoc(expr) + text("}")
 ```
 
+**String escape rules:** The lexer stores escape sequences as their escaped form (`\\n` as two characters, not a newline). The formatter emits `StringLiteral.value` as-is inside quotes — no re-escaping needed. If the lexer behavior changes to store actual characters, the formatter must re-escape `"` → `\"`, `\n` → `\\n`, etc.
+
 ### Operators
 
 ```
-BinaryExpr(op, l, r) → group(toDoc(l) <+> text(op) <+> toDoc(r))
-UnaryExpr("-", e)    → text("-") <> toDoc(e)
-UnaryExpr("not", e)  → text("not") <+> toDoc(e)
+BinaryExpr(op, l, r) → group(parenIfNeeded(l) <> softLine <> text(op) <+> parenIfNeeded(r))
+UnaryExpr("-", e)    → text("-") <> parenIfNeeded(e)
+UnaryExpr("not", e)  → text("not") <+> parenIfNeeded(e)
 ```
 
-Where `<+>` is `catWithSpace` and `<>` is `cat`.
+Where `<+>` is `catWithSpace`, `<>` is `cat`, and `softLine` breaks to newline when group overflows (the key for Wadler-Lindig width-respecting).
 
-Parenthesization: if a binary expr's child is also a binary expr with lower precedence, wrap in parens. Use the same precedence table as the Pratt parser.
+**Parenthesization rule:** Wrap a subexpression in parens if it is a `BinaryExpr` with lower or equal precedence than the parent. Use the same precedence table as the Pratt parser. The formatter normalizes parenthesization — redundant parens are removed, necessary parens are added. This is a deliberate canonicalization.
 
 ### Blocks
 
@@ -91,29 +93,35 @@ Block(stmts, expr)     → group(
 ### Lambdas
 
 ```
-Lambda(params, body) → hsep(params.map(text)) <+> text("->") <+> toDoc(body)
+Lambda(params, body) → fillSep(params.map(text)) <+> text("->") <+> toDoc(body)
 ```
 
 Example: `a b -> { a + b }`
 
+Lambda body is always a `Block` in v0.2 (enforced by parser). The formatter can assume this.
+
 ### Application
 
 ```
-App(func, args) → toDoc(func) <+> hsep(args.map(toDoc))
+App(func, args) → toDoc(func) <+> fillSep(args.map(parenIfNonAtom))
 ```
 
 Example: `add 3 4`
 
-For complex args, parenthesize: `add (1 + 2) 3`
+**Argument parenthesization rule:** Wrap an argument in parens if it is NOT an atom. Atoms are: `Ident`, `IntLiteral`, `FloatLiteral`, `StringLiteral`, `BoolLiteral`, `UnitLiteral`, `Block`, `StringInterp`, `DotAccess`. Everything else (`BinaryExpr`, `UnaryExpr`, `Lambda`, `App`, `Force`) gets parens. Example: `add (1 + 2) 3`.
+
+`fillSep` instead of `hsep` allows long argument lists to break across lines.
 
 ### Statements
 
 ```
-Declaration(name, _, value, _, _) → text(name) <+> text("=") <+> toDoc(value)
-Declare(name, type)               → text("declare") <+> text(name) <+> text(":") <+> formatType(type)
-ForceStatement(Force(expr))       → text("!") <> toDoc(expr)
-ExprStatement(expr)               → toDoc(expr)
+Declaration(name, value)     → text(name) <+> text("=") <+> toDoc(value)
+Declare(name, type)          → text("declare") <+> text(name) <+> text(":") <+> formatType(type)
+ForceStatement(stmt)         → toDoc(stmt.expr)   -- stmt.expr is always a Force node, which formats as !expr
+ExprStatement(expr)          → toDoc(expr)
 ```
+
+Note: `Declaration.mutable` is always `false` in v0.2 (parser doesn't parse `mut` yet). When `mut` is added, format as `mut name = value`. `Declaration.typeAnnotation` is always `None` in v0.2. When present, format as `name : Type = value`.
 
 Each statement followed by `;` when inside a block. Top-level statements separated by newlines (no semicolons).
 
@@ -122,7 +130,7 @@ Each statement followed by `;` when inside a block. Top-level statements separat
 ```
 ConcreteType(name)          → text(name)
 ArrowType(param, result)    → formatType(param) <+> text("->") <+> formatType(result)
-EffectType(value, deps, err) → text("Effect") <+> formatType(value) <+> text("{") <+> hsep(deps) <+> text("}") <+> formatType(err)
+EffectType(value, deps, err) → text("Effect") <+> formatType(value) <+> text("{") <+> hsep(deps.map(text)) <+> text("}") <+> formatType(err)
 ```
 
 ### Identifiers and DotAccess
@@ -136,10 +144,10 @@ Force(expr)              → text("!") <> toDoc(expr)
 ### Program
 
 ```
-Program(stmts) → vsep(stmts.map(formatTopLevelStmt))
+Program(stmts) → concatWith((a, b) => a <> hardLine <> hardLine <> b)(stmts.map(formatTopLevelStmt))
 ```
 
-Top-level statements separated by blank lines between declarations. No trailing semicolons at top level.
+Top-level statements separated by blank lines (double newline). No trailing semicolons at top level.
 
 ## File Structure
 
