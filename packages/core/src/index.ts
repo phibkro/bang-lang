@@ -1,4 +1,5 @@
 export * as Ast from "./Ast.js";
+export * as AstGen from "./AstGen.js";
 export * as Compiler from "./Compiler.js";
 export * as Checker from "./Checker.js";
 export * as Interpreter from "./Interpreter.js";
