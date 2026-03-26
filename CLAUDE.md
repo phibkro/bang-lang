@@ -7,8 +7,10 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (library), `@bang/cli` (CLI
 - `vp check --fix` — format + Oxlint (auto-fix)
 - `vp run lint` — ESLint with Effect/functional rules (auto-fix)
 - `vp run check` — tsc + ESLint (full verification)
-- `vp test packages/core` — run core tests (shows "no tests" in summary; use `npx vitest run` for accurate counts)
-- `bun run packages/cli/src/index.ts compile examples/hello.bang` — test CLI manually
+- `npx vitest run` — run all tests (139 tests, use this for accurate counts)
+- `bang compile examples/hello.bang` — compile .bang to .ts
+- `bang fmt <file.bang>` — format in place
+- `bang run <file.bang>` — compile and execute
 
 ## Language Design
 
@@ -138,14 +140,6 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 
 ## Specs & Plans
 
-- Language spec: `docs/language-spec.md` (EBNF v0.2)
-- Compiler design: `docs/superpowers/specs/2026-03-25-bang-compiler-design.md`
-- Interpreter design: `docs/superpowers/specs/2026-03-26-interpreter-design.md`
-- v0.1 plan: `docs/superpowers/plans/2026-03-25-bang-compiler-v0.1.md` (completed)
-- v0.2 plan: `docs/superpowers/plans/2026-03-25-bang-compiler-v0.2.md` (completed)
-- Interpreter design: `docs/superpowers/specs/2026-03-26-interpreter-design.md`
-- Formatter design: `docs/superpowers/specs/2026-03-26-formatter-design.md`
-- AST generators: `docs/superpowers/specs/2026-03-26-ast-generators-design.md`
-- Interpreter plan: `docs/superpowers/plans/2026-03-26-interpreter.md` (completed)
-- Formatter plan: `docs/superpowers/plans/2026-03-26-formatter.md` (completed)
-- Effect repo: `~/Projects/Repos/effect` — full source for Effect, @effect/printer, @effect/cli, etc. Read source here instead of node_modules.
+- Language spec: `docs/language-spec.md`
+- Design specs and plans: `docs/superpowers/specs/` and `docs/superpowers/plans/`
+- Effect source: `~/Projects/Repos/effect` — read here instead of node_modules
