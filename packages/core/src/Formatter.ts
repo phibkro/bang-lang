@@ -52,17 +52,26 @@ const parenIfNonAtom = (e: Ast.Expr): Doc.Doc<never> => {
   return Doc.hcat([Doc.text("("), formatExpr(e), Doc.text(")")]);
 };
 
-const parenIfLowerPrec = (child: Ast.Expr, parentOp: string): Doc.Doc<never> => {
+const parenIfLowerPrec = (
+  child: Ast.Expr,
+  parentOp: string,
+  isRight: boolean,
+): Doc.Doc<never> => {
   const childDoc = formatExpr(child);
-  if (child._tag === "BinaryExpr" && (PREC[child.op] ?? 0) < (PREC[parentOp] ?? 0)) {
-    return Doc.hcat([Doc.text("("), childDoc, Doc.text(")")]);
+  if (child._tag === "BinaryExpr") {
+    const childPrec = PREC[child.op] ?? 0;
+    const parentPrec = PREC[parentOp] ?? 0;
+    // Paren if strictly lower, OR equal precedence on right side (preserves associativity)
+    if (childPrec < parentPrec || (isRight && childPrec === parentPrec)) {
+      return Doc.hcat([Doc.text("("), childDoc, Doc.text(")")]);
+    }
   }
   return childDoc;
 };
 
 const formatBinaryExpr = (e: Ast.BinaryExpr): Doc.Doc<never> => {
-  const left = parenIfLowerPrec(e.left, e.op);
-  const right = parenIfLowerPrec(e.right, e.op);
+  const left = parenIfLowerPrec(e.left, e.op, false);
+  const right = parenIfLowerPrec(e.right, e.op, true);
   const op = Doc.text(e.op);
   return Doc.group(Doc.hcat([left, Doc.catWithSoftLine(Doc.cat(Doc.text(" "), op), right)]));
 };
@@ -92,6 +101,9 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
       );
       const bodyParts = [...stmtDocs, formatExpr(e.expr)];
       const body = bodyParts.reduce((a, b) => Doc.catWithSoftLine(a, b));
+      // Note: Doc.nest inside Doc.group triggers a flatten bug in @effect/printer.
+      // Using flat-only layout for now. Indentation deferred until the bug is resolved
+      // or we switch to a different rendering approach.
       return Doc.group(
         Doc.hcat([Doc.text("{"), Doc.catWithSoftLine(Doc.empty, body), Doc.text(" }")]),
       );
