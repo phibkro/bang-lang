@@ -173,6 +173,27 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
   );
 
 // ---------------------------------------------------------------------------
+// Pattern binding (collects names introduced by a pattern into scope)
+// ---------------------------------------------------------------------------
+
+const bindPatternNames = (pat: Ast.Pattern, scope: Scope): Scope =>
+  Match.value(pat).pipe(
+    Match.tag("WildcardPattern", () => scope),
+    Match.tag("BindingPattern", (p) =>
+      HashMap.set(scope, p.name, {
+        name: p.name,
+        type: Option.none(),
+        effectClass: "signal" as const,
+      }),
+    ),
+    Match.tag("ConstructorPattern", (p) =>
+      Arr.reduce(p.patterns, scope, (acc, sub) => bindPatternNames(sub, acc)),
+    ),
+    Match.tag("LiteralPattern", () => scope),
+    Match.exhaustive,
+  );
+
+// ---------------------------------------------------------------------------
 // Validate scope (returns Effect to fail on undeclared identifiers)
 // ---------------------------------------------------------------------------
 
@@ -237,7 +258,8 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
       Effect.gen(function* () {
         yield* validateExprScope(e.scrutinee, scope);
         for (const arm of e.arms) {
-          yield* validateExprScope(arm.body, scope);
+          const armScope = bindPatternNames(arm.pattern, scope);
+          yield* validateExprScope(arm.body, armScope);
         }
       }),
     ),

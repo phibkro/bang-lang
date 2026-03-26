@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Interpreter, Lexer, Parser, Value } from "@bang/core";
+import { Compiler, Formatter, Interpreter, Lexer, Parser, Value } from "@bang/core";
 
 describe("Match parsing", () => {
   const parseSource = (src: string) =>
@@ -94,9 +94,7 @@ describe("Match parsing", () => {
 
   it.effect("parses constructor pattern with nested sub-pattern", () =>
     Effect.gen(function* () {
-      const ast = yield* parseSource(
-        "type Maybe a = Some a | None\nx = match y { Some x -> x }",
-      );
+      const ast = yield* parseSource("type Maybe a = Some a | None\nx = match y { Some x -> x }");
       if (ast.statements[1]._tag === "Declaration") {
         const m = ast.statements[1].value;
         if (m._tag === "MatchExpr" && m.arms[0].pattern._tag === "ConstructorPattern") {
@@ -165,6 +163,115 @@ describe("Match interpreter", () => {
       const ast = yield* parseSource('x = match 42 { 0 -> "zero" }');
       const result = yield* Effect.either(Interpreter.evalProgram(ast));
       expect(result._tag).toBe("Left");
+    }),
+  );
+});
+
+describe("Match codegen", () => {
+  it.effect("generates Match.value for constructor patterns", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile(
+        "type Maybe a = Some a | None\nx = match (Some 1) { Some v -> v, None -> 0 }",
+      );
+      expect(result.code).toContain("Match.value");
+      expect(result.code).toContain('Match.tag("Some"');
+      expect(result.code).toContain('Match.tag("None"');
+      expect(result.code).toContain("Match.exhaustive");
+    }),
+  );
+
+  it.effect("generates Match.when for literal patterns", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile('x = match 42 { 42 -> "yes", _ -> "no" }');
+      expect(result.code).toContain("Match.value");
+      expect(result.code).toContain("Match.when");
+      expect(result.code).toContain("Match.orElse");
+    }),
+  );
+
+  it.effect("generates Match.orElse for wildcard-only", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile('x = match 42 { _ -> "any" }');
+      expect(result.code).toContain("Match.value");
+      expect(result.code).toContain("Match.orElse");
+    }),
+  );
+
+  it.effect("generates Match.orElse for binding pattern as last arm", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile("x = match 42 { n -> n + 1 }");
+      expect(result.code).toContain("Match.value");
+      expect(result.code).toContain("Match.orElse");
+    }),
+  );
+
+  it.effect("imports Match in generated code", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile(
+        "type Maybe a = Some a | None\nx = match None { Some v -> v, None -> 0 }",
+      );
+      expect(result.code).toContain("Match");
+      expect(result.code).toContain('from "effect"');
+    }),
+  );
+
+  it.effect("generates constructor patterns with exhaustive when all constructors covered", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile(
+        "type Maybe a = Some a | None\nx = match (Some 5) { Some v -> v, None -> 0 }",
+      );
+      expect(result.code).toContain("Match.exhaustive");
+      expect(result.code).not.toContain("Match.orElse");
+    }),
+  );
+
+  it.effect("generates constructor patterns with orElse for wildcard fallback", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile(
+        'type Maybe a = Some a | None\nx = match (Some 5) { Some v -> v, _ -> "fallback" }',
+      );
+      expect(result.code).toContain('Match.tag("Some"');
+      expect(result.code).toContain("Match.orElse");
+    }),
+  );
+});
+
+describe("Match formatter", () => {
+  it.effect("formats match expression with wildcard", () =>
+    Effect.gen(function* () {
+      const formatted = yield* Formatter.formatSource('x = match 42 { _ -> "any" }');
+      expect(formatted).toContain("match");
+      expect(formatted).toContain("->");
+      expect(formatted).toContain("_");
+    }),
+  );
+
+  it.effect("formats match expression with constructor patterns", () =>
+    Effect.gen(function* () {
+      const formatted = yield* Formatter.formatSource(
+        "type Maybe a = Some a | None\nx = match y { Some v -> v, None -> 0 }",
+      );
+      expect(formatted).toContain("match");
+      expect(formatted).toContain("Some v");
+      expect(formatted).toContain("None");
+      expect(formatted).toContain("->");
+    }),
+  );
+
+  it.effect("formats match expression with literal patterns", () =>
+    Effect.gen(function* () {
+      const formatted = yield* Formatter.formatSource('x = match n { 0 -> "zero", _ -> "other" }');
+      expect(formatted).toContain("match");
+      expect(formatted).toContain("0 ->");
+      expect(formatted).toContain("_ ->");
+    }),
+  );
+
+  it.effect("formats match with binding pattern", () =>
+    Effect.gen(function* () {
+      const formatted = yield* Formatter.formatSource("x = match 42 { n -> n + 1 }");
+      expect(formatted).toContain("match");
+      expect(formatted).toContain("n ->");
     }),
   );
 });

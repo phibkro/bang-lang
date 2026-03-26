@@ -77,6 +77,19 @@ const formatUnaryExpr = (e: Ast.UnaryExpr): Doc.Doc<never> => {
   return Doc.cat(Doc.text(e.op), parenIfNonAtom(e.expr));
 };
 
+const formatPattern = (pat: Ast.Pattern): Doc.Doc<never> =>
+  Match.value(pat).pipe(
+    Match.tag("WildcardPattern", () => Doc.text("_")),
+    Match.tag("BindingPattern", (p) => Doc.text(p.name)),
+    Match.tag("ConstructorPattern", (p) => {
+      if (p.patterns.length === 0) return Doc.text(p.tag);
+      const subs = p.patterns.map(formatPattern);
+      return Doc.hsep([Doc.text(p.tag), ...subs]);
+    }),
+    Match.tag("LiteralPattern", (p) => formatExpr(p.value)),
+    Match.exhaustive,
+  );
+
 const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
   Match.value(expr).pipe(
     Match.tag("IntLiteral", (e) => Doc.text(String(e.value))),
@@ -119,7 +132,27 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
       );
       return Doc.hcat([Doc.text('"'), ...parts, Doc.text('"')]);
     }),
-    Match.tag("MatchExpr", () => Doc.text("match { ... }")),
+    Match.tag("MatchExpr", (e) => {
+      const scrutinee = formatExpr(e.scrutinee);
+      const arms = e.arms.map((arm) => {
+        const pat = formatPattern(arm.pattern);
+        const body = formatExpr(arm.body);
+        return Doc.hcat([pat, Doc.text(" -> "), body]);
+      });
+      if (arms.length === 0) {
+        return Doc.hcat([Doc.text("match "), scrutinee, Doc.text(" {}")]);
+      }
+      const armList = arms.reduce((a, b) => Doc.hcat([a, Doc.text(","), Doc.hardLine, b]));
+      return Doc.hcat([
+        Doc.text("match "),
+        scrutinee,
+        Doc.text(" {"),
+        Doc.hardLine,
+        armList,
+        Doc.hardLine,
+        Doc.text("}"),
+      ]);
+    }),
     Match.exhaustive,
   );
 

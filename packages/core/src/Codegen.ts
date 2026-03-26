@@ -248,7 +248,63 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
         .join("");
       return `\`${inner}\``;
     }),
-    Match.tag("MatchExpr", () => `/* match not yet codegen'd */`),
+    Match.tag("MatchExpr", (e) => {
+      const scrutinee = emitExpr(e.scrutinee, decls);
+      const arms = e.arms;
+      const lastArm = arms[arms.length - 1];
+      const lastIsWildcard = lastArm?.pattern._tag === "WildcardPattern";
+      const lastIsBinding = lastArm?.pattern._tag === "BindingPattern";
+      const allConstructor = arms.every(
+        (a) =>
+          a.pattern._tag === "ConstructorPattern" ||
+          a.pattern._tag === "WildcardPattern" ||
+          a.pattern._tag === "BindingPattern",
+      );
+      const hasConstructor = arms.some((a) => a.pattern._tag === "ConstructorPattern");
+
+      const parts: string[] = [];
+      for (let i = 0; i < arms.length; i++) {
+        const arm = arms[i];
+        const isLast = i === arms.length - 1;
+        const body = emitExpr(arm.body, decls);
+
+        if (isLast && (lastIsWildcard || lastIsBinding)) {
+          // Last arm is wildcard or binding — use orElse
+          if (lastIsBinding && arm.pattern._tag === "BindingPattern") {
+            parts.push(`Match.orElse((${arm.pattern.name}) => ${body})`);
+          } else {
+            parts.push(`Match.orElse(() => ${body})`);
+          }
+        } else if (arm.pattern._tag === "ConstructorPattern") {
+          const pat = arm.pattern;
+          if (pat.patterns.length === 0) {
+            parts.push(`Match.tag("${pat.tag}", () => ${body})`);
+          } else {
+            const bindings = pat.patterns.map((sub, idx) => {
+              if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
+              return `_${idx}`;
+            });
+            parts.push(`Match.tag("${pat.tag}", ({ ${bindings.join(", ")} }) => ${body})`);
+          }
+        } else if (arm.pattern._tag === "LiteralPattern") {
+          const litVal = emitExpr(arm.pattern.value, decls);
+          parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
+        } else if (arm.pattern._tag === "BindingPattern") {
+          // Non-last binding pattern — use Match.when that always matches
+          parts.push(`Match.when(() => true, (${arm.pattern.name}) => ${body})`);
+        } else {
+          // WildcardPattern not at end — use Match.when that always matches
+          parts.push(`Match.when(() => true, () => ${body})`);
+        }
+      }
+
+      // If all constructor patterns and no wildcard/binding at end, use exhaustive
+      if (hasConstructor && allConstructor && !lastIsWildcard && !lastIsBinding) {
+        parts.push("Match.exhaustive");
+      }
+
+      return `Match.value(${scrutinee}).pipe(\n  ${parts.join(",\n  ")}\n)`;
+    }),
     Match.exhaustive,
   );
 
@@ -303,10 +359,34 @@ const emitStatement = (w: WriterState, stmt: TypedAst.TypedStmt, decls: DeclMap)
 // Program generation
 // ---------------------------------------------------------------------------
 
+const exprContainsMatch = (expr: Ast.Expr): boolean =>
+  Match.value(expr).pipe(
+    Match.tag("MatchExpr", () => true),
+    Match.tag("BinaryExpr", (e) => exprContainsMatch(e.left) || exprContainsMatch(e.right)),
+    Match.tag("UnaryExpr", (e) => exprContainsMatch(e.expr)),
+    Match.tag(
+      "Block",
+      (e) => e.statements.some((s) => stmtContainsMatch(s)) || exprContainsMatch(e.expr),
+    ),
+    Match.tag("Lambda", (e) => exprContainsMatch(e.body)),
+    Match.tag("App", (e) => exprContainsMatch(e.func) || e.args.some(exprContainsMatch)),
+    Match.tag("Force", (e) => exprContainsMatch(e.expr)),
+    Match.orElse(() => false),
+  );
+
+const stmtContainsMatch = (stmt: Ast.Stmt): boolean =>
+  Match.value(stmt).pipe(
+    Match.tag("Declaration", (s) => exprContainsMatch(s.value)),
+    Match.tag("ExprStatement", (s) => exprContainsMatch(s.expr)),
+    Match.tag("ForceStatement", (s) => exprContainsMatch(s.expr)),
+    Match.orElse(() => false),
+  );
+
 const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const decls = collectDeclaredNames(program.statements);
   const hasForce = Arr.some(program.statements, (s) => s.node._tag === "ForceStatement");
   const hasTypeDecl = Arr.some(program.statements, (s) => s.node._tag === "TypeDecl");
+  const hasMatch = Arr.some(program.statements, (s) => stmtContainsMatch(s.node));
   const needsEffectImport = HashMap.size(decls) > 0 || hasForce;
   const needsDataImport = hasTypeDecl;
 
@@ -314,6 +394,7 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const imports: string[] = [];
   if (needsEffectImport) imports.push("Effect");
   if (needsDataImport) imports.push("Data");
+  if (hasMatch) imports.push("Match");
   const w0 =
     imports.length > 0
       ? writeBlankLine(writeLine(emptyWriter, `import { ${imports.join(", ")} } from "effect"`))
