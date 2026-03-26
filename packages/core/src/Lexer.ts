@@ -85,14 +85,7 @@ const advance = (s: ScanState): ScanState => {
 const advanceN = (s: ScanState, n: number): ScanState => (n <= 0 ? s : advanceN(advance(s), n - 1));
 
 const makeSpan = (start: ScanState, end: ScanState): Span.Span =>
-  Span.make({
-    startLine: start.line,
-    startCol: start.col,
-    startOffset: start.offset,
-    endLine: end.line,
-    endCol: end.col,
-    endOffset: end.offset,
-  });
+  new Span.Span({ start: start.offset, end: end.offset });
 
 const consumeWhile = (
   s: ScanState,
@@ -327,13 +320,9 @@ export const tokenize = (source: string): Effect.Effect<Token[], CompilerError> 
     },
   }).pipe(
     Effect.map((acc) => {
-      const eofSpan = Span.make({
-        startLine: acc.state.line,
-        startCol: acc.state.col,
-        startOffset: acc.state.offset,
-        endLine: acc.state.line,
-        endCol: acc.state.col,
-        endOffset: acc.state.offset,
+      const eofSpan = new Span.Span({
+        start: acc.state.offset,
+        end: acc.state.offset,
       });
       return [...Chunk.toArray(acc.tokens), new EOF({ span: eofSpan })];
     }),

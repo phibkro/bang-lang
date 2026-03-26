@@ -1,5 +1,6 @@
 import { Array, Match, Option } from "effect";
 import type { CompilerError } from "./CompilerError.js";
+import { offsetToLineCol } from "./Span.js";
 
 export const format = (error: CompilerError, source: string): string => {
   const category = Match.value(error).pipe(
@@ -11,18 +12,19 @@ export const format = (error: CompilerError, source: string): string => {
   );
 
   const { message, span, hint } = error;
+  const startPos = offsetToLineCol(source, span.start);
+  const endPos = offsetToLineCol(source, span.end);
   const lines = source.split("\n");
-  const lineIndex = span.startLine - 1;
-  const sourceLine = lines[lineIndex] ?? "";
-  const lineNum = String(span.startLine);
+  const sourceLine = lines[startPos.line - 1] ?? "";
+  const lineNum = String(startPos.line);
   const gutter = " ".repeat(lineNum.length);
-  const caretCount = Math.max(1, span.endCol - span.startCol);
-  const caretPad = " ".repeat(span.startCol);
+  const caretCount = Math.max(1, endPos.col - startPos.col);
+  const caretPad = " ".repeat(startPos.col);
   const carets = "^".repeat(caretCount);
 
   const parts: string[] = [
     `error[${category}]: ${message}`,
-    ` --> source.bang:${span.startLine}:${span.startCol + 1}`,
+    ` --> source.bang:${startPos.line}:${startPos.col + 1}`,
     `${gutter}  |`,
     `${lineNum} | ${sourceLine}`,
     `${gutter}  | ${caretPad}${carets}`,

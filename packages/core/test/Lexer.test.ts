@@ -99,8 +99,8 @@ greeting = "hello, bang"
     Effect.gen(function* () {
       const tokens = yield* Lexer.tokenize("x = 42");
       expect(tokens[0]._tag).toBe("Ident");
-      expect((tokens[0] as any).span.startLine).toBe(1);
-      expect((tokens[0] as any).span.startCol).toBe(0);
+      expect((tokens[0] as any).span.start).toBe(0);
+      expect((tokens[0] as any).span.end).toBe(1);
     }),
   );
 
