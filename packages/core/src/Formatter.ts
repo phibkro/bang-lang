@@ -77,6 +77,19 @@ const formatUnaryExpr = (e: Ast.UnaryExpr): Doc.Doc<never> => {
   return Doc.cat(Doc.text(e.op), parenIfNonAtom(e.expr));
 };
 
+const formatPattern = (pat: Ast.Pattern): Doc.Doc<never> =>
+  Match.value(pat).pipe(
+    Match.tag("WildcardPattern", () => Doc.text("_")),
+    Match.tag("BindingPattern", (p) => Doc.text(p.name)),
+    Match.tag("ConstructorPattern", (p) => {
+      if (p.patterns.length === 0) return Doc.text(p.tag);
+      const subs = p.patterns.map(formatPattern);
+      return Doc.hsep([Doc.text(p.tag), ...subs]);
+    }),
+    Match.tag("LiteralPattern", (p) => formatExpr(p.value)),
+    Match.exhaustive,
+  );
+
 const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
   Match.value(expr).pipe(
     Match.tag("IntLiteral", (e) => Doc.text(String(e.value))),
@@ -118,6 +131,27 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
           : Doc.hcat([Doc.text("${"), formatExpr(p.value), Doc.text("}")]),
       );
       return Doc.hcat([Doc.text('"'), ...parts, Doc.text('"')]);
+    }),
+    Match.tag("MatchExpr", (e) => {
+      const scrutinee = formatExpr(e.scrutinee);
+      const arms = e.arms.map((arm) => {
+        const pat = formatPattern(arm.pattern);
+        const body = formatExpr(arm.body);
+        return Doc.hcat([pat, Doc.text(" -> "), body]);
+      });
+      if (arms.length === 0) {
+        return Doc.hcat([Doc.text("match "), scrutinee, Doc.text(" {}")]);
+      }
+      const armList = arms.reduce((a, b) => Doc.hcat([a, Doc.text(","), Doc.hardLine, b]));
+      return Doc.hcat([
+        Doc.text("match "),
+        scrutinee,
+        Doc.text(" {"),
+        Doc.hardLine,
+        armList,
+        Doc.hardLine,
+        Doc.text("}"),
+      ]);
     }),
     Match.exhaustive,
   );
@@ -177,6 +211,35 @@ const formatTopLevelStmt = (stmt: Ast.Stmt): Doc.Doc<never> =>
     ),
     Match.tag("ForceStatement", (s) => formatExpr(s.expr)),
     Match.tag("ExprStatement", (s) => formatExpr(s.expr)),
+    Match.tag("TypeDecl", (s) => {
+      const params = s.typeParams.length > 0 ? " " + s.typeParams.join(" ") : "";
+      const ctors = s.constructors.map((ctor) =>
+        Match.value(ctor).pipe(
+          Match.tag("NullaryConstructor", (c) => Doc.text(c.tag)),
+          Match.tag("PositionalConstructor", (c) => {
+            const fields = c.fields.map((f) => formatType(f));
+            return Doc.hsep([Doc.text(c.tag), ...fields]);
+          }),
+          Match.tag("NamedConstructor", (c) => {
+            const fields = c.fields.map((f) =>
+              Doc.hcat([Doc.text(f.name), Doc.text(" : "), formatType(f.type)]),
+            );
+            const inner = fields.reduce((a, b) => Doc.hcat([a, Doc.text(", "), b]));
+            return Doc.hcat([Doc.text(c.tag), Doc.text(" { "), inner, Doc.text(" }")]);
+          }),
+          Match.exhaustive,
+        ),
+      );
+      const ctorDoc = ctors.reduce((a, b) => Doc.hcat([a, Doc.text(" | "), b]));
+      return Doc.hcat([Doc.text(`type ${s.name}${params} = `), ctorDoc]);
+    }),
+    Match.tag("Mutation", (s) =>
+      Doc.hcat([Doc.text(s.target), Doc.text(" <- "), formatExpr(s.value)]),
+    ),
+    Match.tag("Import", (s) =>
+      Doc.text(`from ${s.modulePath.join(".")} import { ${s.names.join(", ")} }`),
+    ),
+    Match.tag("Export", (s) => Doc.text(`export { ${s.names.join(", ")} }`)),
     Match.exhaustive,
   );
 

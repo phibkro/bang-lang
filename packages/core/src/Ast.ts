@@ -31,6 +31,40 @@ export class EffectType extends Schema.TaggedClass<EffectType>()("EffectType", {
 export type Type = ConcreteType | ArrowType | EffectType;
 
 // ---------------------------------------------------------------------------
+// Pattern nodes
+// ---------------------------------------------------------------------------
+
+// Forward-declare recursive Pattern schema
+const PatternSchema: Schema.Schema<Pattern> = Schema.suspend(() =>
+  Schema.Union(WildcardPattern, BindingPattern, ConstructorPattern, LiteralPattern),
+);
+
+export class WildcardPattern extends Schema.TaggedClass<WildcardPattern>()("WildcardPattern", {
+  span: Span,
+}) {}
+
+export class BindingPattern extends Schema.TaggedClass<BindingPattern>()("BindingPattern", {
+  name: Schema.String,
+  span: Span,
+}) {}
+
+export class ConstructorPattern extends Schema.TaggedClass<ConstructorPattern>()(
+  "ConstructorPattern",
+  {
+    tag: Schema.String,
+    patterns: Schema.Array(Schema.suspend((): Schema.Schema<Pattern> => PatternSchema)),
+    span: Span,
+  },
+) {}
+
+export class LiteralPattern extends Schema.TaggedClass<LiteralPattern>()("LiteralPattern", {
+  value: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
+export type Pattern = WildcardPattern | BindingPattern | ConstructorPattern | LiteralPattern;
+
+// ---------------------------------------------------------------------------
 // Expression nodes
 // ---------------------------------------------------------------------------
 
@@ -51,6 +85,7 @@ const ExprSchema: Schema.Schema<Expr> = Schema.suspend(() =>
     BinaryExpr,
     UnaryExpr,
     StringInterp,
+    MatchExpr,
   ),
 );
 
@@ -141,6 +176,18 @@ export class StringInterp extends Schema.TaggedClass<StringInterp>()("StringInte
   span: Span,
 }) {}
 
+export class Arm extends Schema.TaggedClass<Arm>()("Arm", {
+  pattern: Schema.suspend((): Schema.Schema<Pattern> => PatternSchema),
+  body: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
+export class MatchExpr extends Schema.TaggedClass<MatchExpr>()("MatchExpr", {
+  scrutinee: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  arms: Schema.Array(Arm),
+  span: Span,
+}) {}
+
 export type Expr =
   | Ident
   | DotAccess
@@ -155,14 +202,62 @@ export type Expr =
   | Lambda
   | BinaryExpr
   | UnaryExpr
-  | StringInterp;
+  | StringInterp
+  | MatchExpr;
+
+// ---------------------------------------------------------------------------
+// Constructor nodes (for TypeDecl)
+// ---------------------------------------------------------------------------
+
+export class NullaryConstructor extends Schema.TaggedClass<NullaryConstructor>()(
+  "NullaryConstructor",
+  {
+    tag: Schema.String,
+    span: Span,
+  },
+) {}
+
+export class PositionalConstructor extends Schema.TaggedClass<PositionalConstructor>()(
+  "PositionalConstructor",
+  {
+    tag: Schema.String,
+    fields: Schema.Array(Schema.suspend((): Schema.Schema<Type> => TypeSchema)),
+    span: Span,
+  },
+) {}
+
+export class NamedConstructor extends Schema.TaggedClass<NamedConstructor>()("NamedConstructor", {
+  tag: Schema.String,
+  fields: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      type: Schema.suspend((): Schema.Schema<Type> => TypeSchema),
+    }),
+  ),
+  span: Span,
+}) {}
+
+export type Constructor = NullaryConstructor | PositionalConstructor | NamedConstructor;
+
+const ConstructorSchema: Schema.Schema<Constructor> = Schema.suspend(() =>
+  Schema.Union(NullaryConstructor, PositionalConstructor, NamedConstructor),
+);
 
 // ---------------------------------------------------------------------------
 // Statement nodes
 // ---------------------------------------------------------------------------
 
 const StmtSchema = Schema.suspend(() =>
-  Schema.Union(Declaration, Declare, ForceStatement, ExprStatement),
+  Schema.Union(
+    Declaration,
+    Declare,
+    ForceStatement,
+    ExprStatement,
+    TypeDecl,
+    Mutation,
+    Import,
+    Export,
+  ),
 );
 
 export class Program extends Schema.TaggedClass<Program>()("Program", {
@@ -196,6 +291,38 @@ export class ExprStatement extends Schema.TaggedClass<ExprStatement>()("ExprStat
   span: Span,
 }) {}
 
-export type Stmt = Declaration | Declare | ForceStatement | ExprStatement;
+export class TypeDecl extends Schema.TaggedClass<TypeDecl>()("TypeDecl", {
+  name: Schema.String,
+  typeParams: Schema.Array(Schema.String),
+  constructors: Schema.Array(Schema.suspend((): Schema.Schema<Constructor> => ConstructorSchema)),
+  span: Span,
+}) {}
 
-export type Node = Program | Stmt | Expr | Type | InterpPart;
+export class Mutation extends Schema.TaggedClass<Mutation>()("Mutation", {
+  target: Schema.String,
+  value: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
+export class Import extends Schema.TaggedClass<Import>()("Import", {
+  modulePath: Schema.Array(Schema.String),
+  names: Schema.Array(Schema.String),
+  span: Span,
+}) {}
+
+export class Export extends Schema.TaggedClass<Export>()("Export", {
+  names: Schema.Array(Schema.String),
+  span: Span,
+}) {}
+
+export type Stmt =
+  | Declaration
+  | Declare
+  | ForceStatement
+  | ExprStatement
+  | TypeDecl
+  | Mutation
+  | Import
+  | Export;
+
+export type Node = Program | Stmt | Expr | Type | InterpPart | Pattern | Constructor | Arm;

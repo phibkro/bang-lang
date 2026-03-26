@@ -14,16 +14,22 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (library), `@bang/cli` (CLI
 
 ## Language Design
 
-Key concepts (see `docs/language-spec.md` for full spec):
+Key concepts (see `docs/language-spec.md` for full v0.4 spec):
 
+- **Pull model**: Every binding is a lazy thunk. `!` is the single site where descriptions become reality.
 - `Effect A E R` — A=value, E=error effects, R=dependency effects. Both E and R are algebraic effects.
-- `effect` declarations define interfaces. Implementations are first-class values, handling is always explicit via `.handle`.
-- `.handle`, `.catch`, `.map` — composable channel handlers via dot syntax, not keywords.
-- `Signal` — push-based reactive computation. Ref changes propagate eagerly to dependent Signals.
+- **Effects are types**: No `effect` keyword. Channel classification is mechanical — operations returning `Nothing` → E channel, returning values → R channel.
+- `.handle`, `.catch`, `.map`, `.tap` — composable channel handlers via dot syntax.
+- `Signal A E R` — pure lazy computation (no `!` on effectful expressions). Distinct from `Effect` at type level, same at runtime.
+- `on` — explicit push subscriptions with compile-time cycle detection. Push is opt-in, pull is default.
+- `use` — structured resource acquisition replacing `defer`. `use x = f; rest` desugars to `!f (x) -> { rest }`.
+- `gen` — escape hatch to raw Effect TS (replaces `effect` block).
 - `type` declarations are nominal (branded). Anonymous types are structural. Every type auto-derives Schema.
+- Type constraints use angle brackets: `<a : Numeric> a -> a` (no `where` keyword).
 - Type variables are always lowercase (`a`, `b`). Concrete types uppercase (`Int`, `Maybe`).
 - `[1, 2, 3]` is Array (JS array). `List a` (Cons/Nil) is a separate ADT.
 - `!` binds loosest (except `<-`) — forces everything to the right.
+- Keywords (18): `mut type declare from import export match not and or xor if true false transaction gen on use`
 
 ## Architecture
 
@@ -77,7 +83,8 @@ Pragmatic (skip):
 
 ## Status
 
-v0.2 compiler + interpreter + formatter complete. 139 tests, 200 random property test iterations.
+v0.3 compiler complete. 199 tests, 200 random property test iterations.
+v0.3 adds: match+patterns (wildcard, binding, constructor, literal), type declarations (ADTs), mut+assignment, import/export.
 Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)` — covers parser + formatter + interpreter.
 
 ## Design Process

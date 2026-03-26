@@ -14,6 +14,7 @@ interface ScopeEntry {
   readonly name: string;
   readonly type: Option.Option<Ast.Type>;
   readonly effectClass: "signal" | "effect";
+  readonly mutable: boolean;
 }
 
 type Scope = HashMap.HashMap<string, ScopeEntry>;
@@ -80,6 +81,7 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
           name: s.name,
           type: Option.some(s.typeAnnotation),
           effectClass: returnsEffect(s.typeAnnotation) ? ("effect" as const) : ("signal" as const),
+          mutable: false,
         }),
       ),
       Match.tag("Declaration", (s) =>
@@ -87,7 +89,29 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
           name: s.name,
           type: s.typeAnnotation,
           effectClass: classifyExpr(s.value, acc),
+          mutable: s.mutable,
         }),
+      ),
+      Match.tag("TypeDecl", (s) =>
+        Arr.reduce(s.constructors, acc, (scope, ctor) => {
+          const ctorTag = ctor.tag;
+          return HashMap.set(scope, ctorTag, {
+            name: ctorTag,
+            type: Option.none(),
+            effectClass: "signal" as const,
+            mutable: false,
+          });
+        }),
+      ),
+      Match.tag("Import", (s) =>
+        Arr.reduce(s.names, acc, (scope, name) =>
+          HashMap.set(scope, name, {
+            name,
+            type: Option.none(),
+            effectClass: "signal" as const,
+            mutable: false,
+          }),
+        ),
       ),
       Match.orElse(() => acc),
     ),
@@ -138,6 +162,8 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       const stmtHasEffect = e.statements.some(
         (s) =>
           s._tag === "ForceStatement" ||
+          s._tag === "Mutation" ||
+          (s._tag === "Declaration" && s.mutable) ||
           (s._tag === "Declaration" && classifyExpr(s.value, blockScope) === "effect"),
       );
       const exprClass = classifyExpr(e.expr, blockScope);
@@ -146,13 +172,41 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
     Match.tag("Lambda", (e) => {
       // Create child scope with params bound as signal-typed
       const paramScope = Arr.reduce(e.params, scope, (acc, p) =>
-        HashMap.set(acc, p, { name: p, type: Option.none(), effectClass: "signal" as const }),
+        HashMap.set(acc, p, {
+          name: p,
+          type: Option.none(),
+          effectClass: "signal" as const,
+          mutable: false,
+        }),
       );
       // Lambda itself is always signal (it's a value); classify body for internal use
       classifyExpr(e.body, paramScope);
       return "signal" as const;
     }),
     Match.tag("StringInterp", () => "signal" as const),
+    Match.tag("MatchExpr", () => "signal" as const),
+    Match.exhaustive,
+  );
+
+// ---------------------------------------------------------------------------
+// Pattern binding (collects names introduced by a pattern into scope)
+// ---------------------------------------------------------------------------
+
+const bindPatternNames = (pat: Ast.Pattern, scope: Scope): Scope =>
+  Match.value(pat).pipe(
+    Match.tag("WildcardPattern", () => scope),
+    Match.tag("BindingPattern", (p) =>
+      HashMap.set(scope, p.name, {
+        name: p.name,
+        type: Option.none(),
+        effectClass: "signal" as const,
+        mutable: false,
+      }),
+    ),
+    Match.tag("ConstructorPattern", (p) =>
+      Arr.reduce(p.patterns, scope, (acc, sub) => bindPatternNames(sub, acc)),
+    ),
+    Match.tag("LiteralPattern", () => scope),
     Match.exhaustive,
   );
 
@@ -206,7 +260,12 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     ),
     Match.tag("Lambda", (e) => {
       const paramScope = Arr.reduce(e.params, scope, (acc, p) =>
-        HashMap.set(acc, p, { name: p, type: Option.none(), effectClass: "signal" as const }),
+        HashMap.set(acc, p, {
+          name: p,
+          type: Option.none(),
+          effectClass: "signal" as const,
+          mutable: false,
+        }),
       );
       return validateExprScope(e.body, paramScope);
     }),
@@ -216,6 +275,15 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
         (part) => (part._tag === "InterpExpr" ? validateExprScope(part.value, scope) : Effect.void),
         { discard: true },
       ),
+    ),
+    Match.tag("MatchExpr", (e) =>
+      Effect.gen(function* () {
+        yield* validateExprScope(e.scrutinee, scope);
+        for (const arm of e.arms) {
+          const armScope = bindPatternNames(arm.pattern, scope);
+          yield* validateExprScope(arm.body, armScope);
+        }
+      }),
     ),
     Match.exhaustive,
   );
@@ -281,6 +349,50 @@ const checkStmt = (
               hint: "Did you mean to use ! to force this effect?",
             }),
           );
+        }
+        return annotate(s, { type: unknownType, effectClass: "signal" as const });
+      }),
+    ),
+    Match.tag("TypeDecl", (s) =>
+      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+    ),
+    Match.tag("Mutation", (s) =>
+      Effect.gen(function* () {
+        yield* validateExprScope(s.value, scope);
+        const entry = lookupScope(scope, s.target);
+        if (Option.isNone(entry)) {
+          return yield* Effect.fail(
+            new CheckError({
+              message: `Undeclared identifier: ${s.target}`,
+              span: s.span,
+            }),
+          );
+        }
+        if (!entry.value.mutable) {
+          return yield* Effect.fail(
+            new CheckError({
+              message: `Cannot mutate non-mutable binding: ${s.target}`,
+              span: s.span,
+            }),
+          );
+        }
+        return annotate(s, { type: unknownType, effectClass: "signal" as const });
+      }),
+    ),
+    Match.tag("Import", (s) =>
+      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+    ),
+    Match.tag("Export", (s) =>
+      Effect.gen(function* () {
+        for (const name of s.names) {
+          if (!HashMap.has(scope, name)) {
+            return yield* Effect.fail(
+              new CheckError({
+                message: `Exported name not in scope: ${name}`,
+                span: s.span,
+              }),
+            );
+          }
         }
         return annotate(s, { type: unknownType, effectClass: "signal" as const });
       }),

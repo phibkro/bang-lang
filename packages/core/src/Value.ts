@@ -13,9 +13,22 @@ export type Value = Data.TaggedEnum<{
     readonly body: Ast.Expr;
     readonly env: HashMap.HashMap<string, Value>;
   };
+  Tagged: {
+    readonly tag: string;
+    readonly fields: ReadonlyArray<Value>;
+  };
+  Constructor: {
+    readonly tag: string;
+    readonly arity: number;
+    readonly applied: ReadonlyArray<Value>;
+  };
+  MutCell: {
+    readonly ref: { value: Value };
+  };
 }>;
 
-export const { Num, Str, Bool, Unit, Closure, $match } = Data.taggedEnum<Value>();
+export const { Num, Str, Bool, Unit, Closure, Tagged, Constructor, MutCell, $match } =
+  Data.taggedEnum<Value>();
 
 export class EvalError extends Schema.TaggedError<EvalError>()("EvalError", {
   message: Schema.String,
@@ -31,6 +44,17 @@ export const toJS = (v: Value): unknown =>
     Closure: () => {
       throw new Error("Cannot convert Closure to JS");
     },
+    Tagged: (t) => {
+      const fields: Record<string, unknown> = { _tag: t.tag };
+      t.fields.forEach((f, i) => {
+        fields[String(i)] = toJS(f);
+      });
+      return fields;
+    },
+    Constructor: () => {
+      throw new Error("Cannot convert Constructor to JS");
+    },
+    MutCell: (m) => toJS(m.ref.value),
   });
 
 export const coerceToString = (v: Value): Effect.Effect<string, EvalError> =>
@@ -46,4 +70,8 @@ export const coerceToString = (v: Value): Effect.Effect<string, EvalError> =>
           span: Span.empty,
         }),
       ),
+    Tagged: (t) =>
+      Effect.succeed(t.fields.length === 0 ? t.tag : `${t.tag}(${t.fields.length} fields)`),
+    Constructor: (c) => Effect.succeed(`<Constructor:${c.tag}/${c.arity}>`),
+    MutCell: (m) => coerceToString(m.ref.value),
   });

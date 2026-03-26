@@ -150,19 +150,95 @@ const collectDeclaredNames = (statements: ReadonlyArray<TypedAst.TypedStmt>): De
   );
 
 // ---------------------------------------------------------------------------
+// Ref.get hoisting helpers
+// ---------------------------------------------------------------------------
+
+/** Walk an expression tree and collect all Ident names that are in mutNames. */
+const collectMutReads = (expr: Ast.Expr, mutNames: ReadonlySet<string>): ReadonlySet<string> => {
+  const reads = new Set<string>();
+  const walk = (e: Ast.Expr): void => {
+    Match.value(e).pipe(
+      Match.tag("Ident", (id) => {
+        if (mutNames.has(id.name)) reads.add(id.name);
+      }),
+      Match.tag("BinaryExpr", (b) => {
+        walk(b.left);
+        walk(b.right);
+      }),
+      Match.tag("UnaryExpr", (u) => walk(u.expr)),
+      Match.tag("Force", (f) => walk(f.expr)),
+      Match.tag("App", (a) => {
+        walk(a.func);
+        a.args.forEach(walk);
+      }),
+      Match.tag("StringInterp", (s) =>
+        s.parts.forEach((p) => {
+          if (p._tag === "InterpExpr") walk(p.value);
+        }),
+      ),
+      Match.orElse(() => {}),
+    );
+  };
+  walk(expr);
+  return reads;
+};
+
+/** Check if an expression is a simple lone Ident (no compound sub-expressions). */
+const isSimpleIdent = (expr: Ast.Expr): boolean => expr._tag === "Ident";
+
+/**
+ * Emit hoisted Ref.get bindings for mutable names read inside a compound expression.
+ * Returns [prefixLines, hoistedNames] where hoistedNames maps original name -> temp name.
+ */
+const hoistMutReads = (
+  expr: Ast.Expr,
+  mutNames: ReadonlySet<string>,
+): { readonly prefixLines: ReadonlyArray<string>; readonly hoisted: ReadonlySet<string> } => {
+  // Simple ident: yield* Ref.get(x) at statement level is fine, no hoisting needed
+  if (isSimpleIdent(expr)) return { prefixLines: [], hoisted: new Set() };
+  const reads = collectMutReads(expr, mutNames);
+  if (reads.size === 0) return { prefixLines: [], hoisted: new Set() };
+  const prefixLines: string[] = [];
+  for (const name of reads) {
+    prefixLines.push(`const _${name} = yield* Ref.get(${name})`);
+  }
+  return { prefixLines, hoisted: reads };
+};
+
+// ---------------------------------------------------------------------------
 // Block statement emission (pure string, no WriterState)
 // ---------------------------------------------------------------------------
 
-const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap): string =>
+const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap, mutNames: ReadonlySet<string>): string =>
   Match.value(stmt).pipe(
-    Match.tag("Declaration", (s) => `const ${s.name} = ${emitExpr(s.value, decls)}`),
+    Match.tag("Declaration", (s) => {
+      if (s.mutable) {
+        const { prefixLines, hoisted } = hoistMutReads(s.value, mutNames);
+        const valueCode = emitExpr(s.value, decls, mutNames, hoisted);
+        return [...prefixLines, `const ${s.name} = yield* Ref.make(${valueCode})`].join("\n  ");
+      }
+      const { prefixLines, hoisted } = hoistMutReads(s.value, mutNames);
+      const valueCode = emitExpr(s.value, decls, mutNames, hoisted);
+      return [...prefixLines, `const ${s.name} = ${valueCode}`].join("\n  ");
+    }),
     Match.tag("ForceStatement", (s) =>
       s.expr._tag === "Force"
-        ? `yield* ${emitExpr(s.expr.expr, decls)}`
-        : `yield* ${emitExpr(s.expr, decls)}`,
+        ? `yield* ${emitExpr(s.expr.expr, decls, mutNames)}`
+        : `yield* ${emitExpr(s.expr, decls, mutNames)}`,
     ),
-    Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls)),
+    Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls, mutNames)),
     Match.tag("Declare", () => ""),
+    Match.tag("TypeDecl", () => ""),
+    Match.tag("Mutation", (s) => {
+      const { prefixLines, hoisted } = hoistMutReads(s.value, mutNames);
+      const valueCode = emitExpr(s.value, decls, mutNames, hoisted);
+      return [...prefixLines, `yield* Ref.set(${s.target}, ${valueCode})`].join("\n  ");
+    }),
+    Match.tag("Import", (s) => {
+      const path = s.modulePath.map((p) => p.toLowerCase()).join("/");
+      return `import { ${s.names.join(", ")} } from "./${path}"`;
+    }),
+    Match.tag("Export", (s) => `export { ${s.names.join(", ")} }`),
     Match.exhaustive,
   );
 
@@ -170,42 +246,57 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap): string =>
 // Expression emission (pure string building)
 // ---------------------------------------------------------------------------
 
-const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
+const emitExpr = (
+  expr: Ast.Expr,
+  decls: DeclMap,
+  mutNames: ReadonlySet<string> = new Set(),
+  hoistedNames: ReadonlySet<string> = new Set(),
+): string =>
   Match.value(expr).pipe(
     Match.tag("StringLiteral", (e) => `"${e.value}"`),
     Match.tag("IntLiteral", (e) => String(e.value)),
     Match.tag("BoolLiteral", (e) => String(e.value)),
     Match.tag("UnitLiteral", () => "undefined"),
-    Match.tag("Ident", (e) => e.name),
+    Match.tag("Ident", (e) =>
+      hoistedNames.has(e.name)
+        ? `_${e.name}`
+        : mutNames.has(e.name)
+          ? `yield* Ref.get(${e.name})`
+          : e.name,
+    ),
     Match.tag("DotAccess", (e) =>
       Option.match(buildDottedName(e), {
-        onNone: () => `${emitExpr(e.object, decls)}.${e.field}`,
+        onNone: () => `${emitExpr(e.object, decls, mutNames, hoistedNames)}.${e.field}`,
         onSome: (name) =>
           Option.match(HashMap.get(decls, name), {
-            onNone: () => `${emitExpr(e.object, decls)}.${e.field}`,
+            onNone: () => `${emitExpr(e.object, decls, mutNames, hoistedNames)}.${e.field}`,
             onSome: (info) => info.wrapperName,
           }),
       }),
     ),
     Match.tag("App", (e) => {
-      const funcCode = emitExpr(e.func, decls);
+      const funcCode = emitExpr(e.func, decls, mutNames, hoistedNames);
       // Check if the function is a declared wrapper (use comma-separated args)
       const dottedName = buildDottedName(e.func);
       const isDeclared = Option.isSome(Option.flatMap(dottedName, (n) => HashMap.get(decls, n)));
       if (isDeclared) {
-        const args = Arr.map(e.args, (a) => emitExpr(a, decls)).join(", ");
+        const args = Arr.map(e.args, (a) => emitExpr(a, decls, mutNames, hoistedNames)).join(", ");
         return `${funcCode}(${args})`;
       }
       // User-defined: curried application
-      return Arr.reduce(e.args, funcCode, (fn, arg) => `${fn}(${emitExpr(arg, decls)})`);
+      return Arr.reduce(
+        e.args,
+        funcCode,
+        (fn, arg) => `${fn}(${emitExpr(arg, decls, mutNames, hoistedNames)})`,
+      );
     }),
-    Match.tag("Force", (e) => `yield* ${emitExpr(e.expr, decls)}`),
+    Match.tag("Force", (e) => `yield* ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`),
     Match.tag("FloatLiteral", (e) => String(e.value)),
     Match.tag("BinaryExpr", (e) => {
       const op = mapBinaryOp(e.op);
       const prec = jsPrecOf(op);
-      const leftCode = emitExpr(e.left, decls);
-      const rightCode = emitExpr(e.right, decls);
+      const leftCode = emitExpr(e.left, decls, mutNames, hoistedNames);
+      const rightCode = emitExpr(e.right, decls, mutNames, hoistedNames);
       const left =
         e.left._tag === "BinaryExpr" && jsPrecOf(mapBinaryOp(e.left.op)) < prec
           ? `(${leftCode})`
@@ -218,31 +309,97 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
     }),
     Match.tag("UnaryExpr", (e) => {
       const op = mapUnaryOp(e.op);
-      return `${op}${emitExpr(e.expr, decls)}`;
+      return `${op}${emitExpr(e.expr, decls, mutNames, hoistedNames)}`;
     }),
     Match.tag("Block", (e) => {
+      // Collect mut names from block statements
+      const blockMutNames = new Set(mutNames);
+      for (const stmt of e.statements) {
+        if (stmt._tag === "Declaration" && stmt.mutable) {
+          blockMutNames.add(stmt.name);
+        }
+      }
       if (e.statements.length === 0) {
-        return emitExpr(e.expr, decls);
+        return emitExpr(e.expr, decls, blockMutNames);
       }
       const stmtLines = e.statements.map((stmt) => {
-        const line = emitBlockStmt(stmt, decls);
+        const line = emitBlockStmt(stmt, decls, blockMutNames);
         return `  ${line}`;
       });
-      const returnLine = `  return ${emitExpr(e.expr, decls)}`;
+      const returnLine = `  return ${emitExpr(e.expr, decls, blockMutNames)}`;
       const body = [...stmtLines, returnLine].join("\n");
       return `Effect.gen(function*() {\n${body}\n})`;
     }),
     Match.tag("Lambda", (e) => {
-      const bodyCode = emitExpr(e.body, decls);
+      const bodyCode = emitExpr(e.body, decls, mutNames, hoistedNames);
       return Arr.reduceRight(e.params, bodyCode, (inner, param) => `(${param}) => ${inner}`);
     }),
     Match.tag("StringInterp", (e) => {
       const inner = e.parts
         .map((part) =>
-          part._tag === "InterpText" ? part.value : `\${${emitExpr(part.value, decls)}}`,
+          part._tag === "InterpText"
+            ? part.value
+            : `\${${emitExpr(part.value, decls, mutNames, hoistedNames)}}`,
         )
         .join("");
       return `\`${inner}\``;
+    }),
+    Match.tag("MatchExpr", (e) => {
+      const scrutinee = emitExpr(e.scrutinee, decls, mutNames, hoistedNames);
+      const arms = e.arms;
+      const lastArm = arms[arms.length - 1];
+      const lastIsWildcard = lastArm?.pattern._tag === "WildcardPattern";
+      const lastIsBinding = lastArm?.pattern._tag === "BindingPattern";
+      const allConstructor = arms.every(
+        (a) =>
+          a.pattern._tag === "ConstructorPattern" ||
+          a.pattern._tag === "WildcardPattern" ||
+          a.pattern._tag === "BindingPattern",
+      );
+      const hasConstructor = arms.some((a) => a.pattern._tag === "ConstructorPattern");
+
+      const parts: string[] = [];
+      for (let i = 0; i < arms.length; i++) {
+        const arm = arms[i];
+        const isLast = i === arms.length - 1;
+        const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
+
+        if (isLast && (lastIsWildcard || lastIsBinding)) {
+          // Last arm is wildcard or binding — use orElse
+          if (lastIsBinding && arm.pattern._tag === "BindingPattern") {
+            parts.push(`Match.orElse((${arm.pattern.name}) => ${body})`);
+          } else {
+            parts.push(`Match.orElse(() => ${body})`);
+          }
+        } else if (arm.pattern._tag === "ConstructorPattern") {
+          const pat = arm.pattern;
+          if (pat.patterns.length === 0) {
+            parts.push(`Match.tag("${pat.tag}", () => ${body})`);
+          } else {
+            const bindings = pat.patterns.map((sub, idx) => {
+              if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
+              return `_${idx}`;
+            });
+            parts.push(`Match.tag("${pat.tag}", ({ ${bindings.join(", ")} }) => ${body})`);
+          }
+        } else if (arm.pattern._tag === "LiteralPattern") {
+          const litVal = emitExpr(arm.pattern.value, decls, mutNames, hoistedNames);
+          parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
+        } else if (arm.pattern._tag === "BindingPattern") {
+          // Non-last binding pattern — use Match.when that always matches
+          parts.push(`Match.when(() => true, (${arm.pattern.name}) => ${body})`);
+        } else {
+          // WildcardPattern not at end — use Match.when that always matches
+          parts.push(`Match.when(() => true, () => ${body})`);
+        }
+      }
+
+      // If all constructor patterns and no wildcard/binding at end, use exhaustive
+      if (hasConstructor && allConstructor && !lastIsWildcard && !lastIsBinding) {
+        parts.push("Match.exhaustive");
+      }
+
+      return `Match.value(${scrutinee}).pipe(\n  ${parts.join(",\n  ")}\n)`;
     }),
     Match.exhaustive,
   );
@@ -251,24 +408,70 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
 // Statement emission (returns new WriterState)
 // ---------------------------------------------------------------------------
 
-const emitStatement = (w: WriterState, stmt: TypedAst.TypedStmt, decls: DeclMap): WriterState =>
+const emitStatement = (
+  w: WriterState,
+  stmt: TypedAst.TypedStmt,
+  decls: DeclMap,
+  mutNames: ReadonlySet<string>,
+): WriterState =>
   Match.value(stmt.node).pipe(
     Match.tag("Declaration", (node) => {
       const w1 = recordMapping(w, node.span);
-      return writeLine(w1, `const ${node.name} = ${emitExpr(node.value, decls)}`);
+      const { prefixLines, hoisted } = hoistMutReads(node.value, mutNames);
+      const w2 = prefixLines.reduce((acc, line) => writeLine(acc, line), w1);
+      const valueCode = emitExpr(node.value, decls, mutNames, hoisted);
+      if (node.mutable) {
+        return writeLine(w2, `const ${node.name} = yield* Ref.make(${valueCode})`);
+      }
+      return writeLine(w2, `const ${node.name} = ${valueCode}`);
     }),
     Match.tag("ForceStatement", (node) => {
       const w1 = recordMapping(w, node.span);
       if (node.expr._tag === "Force") {
-        return writeLine(w1, `yield* ${emitExpr(node.expr.expr, decls)}`);
+        return writeLine(w1, `yield* ${emitExpr(node.expr.expr, decls, mutNames)}`);
       }
-      return writeLine(w1, `yield* ${emitExpr(node.expr, decls)}`);
+      return writeLine(w1, `yield* ${emitExpr(node.expr, decls, mutNames)}`);
     }),
     Match.tag("ExprStatement", (node) => {
       const w1 = recordMapping(w, node.span);
-      return writeLine(w1, emitExpr(node.expr, decls));
+      return writeLine(w1, emitExpr(node.expr, decls, mutNames));
     }),
     Match.tag("Declare", () => w), // already handled in wrapper generation
+    Match.tag("TypeDecl", (node) => {
+      const w1 = recordMapping(w, node.span);
+      const lines = node.constructors.map((ctor) =>
+        Match.value(ctor).pipe(
+          Match.tag("NullaryConstructor", (c) => `const ${c.tag} = Data.tagged("${c.tag}")({})`),
+          Match.tag("PositionalConstructor", (c) => {
+            const params = c.fields.map((_, i) => `_${i}`);
+            const fields = params.map((p) => `${p}`).join(", ");
+            return `const ${c.tag} = (${params.join(", ")}) => Data.tagged("${c.tag}")({ ${fields} })`;
+          }),
+          Match.tag("NamedConstructor", (c) => {
+            const fields = c.fields.map((f) => f.name);
+            return `const ${c.tag} = ({ ${fields.join(", ")} }) => Data.tagged("${c.tag}")({ ${fields.join(", ")} })`;
+          }),
+          Match.exhaustive,
+        ),
+      );
+      return lines.reduce((acc, line) => writeLine(acc, line), w1);
+    }),
+    Match.tag("Mutation", (node) => {
+      const w1 = recordMapping(w, node.span);
+      const { prefixLines, hoisted } = hoistMutReads(node.value, mutNames);
+      const w2 = prefixLines.reduce((acc, line) => writeLine(acc, line), w1);
+      const valueCode = emitExpr(node.value, decls, mutNames, hoisted);
+      return writeLine(w2, `yield* Ref.set(${node.target}, ${valueCode})`);
+    }),
+    Match.tag("Import", (node) => {
+      const w1 = recordMapping(w, node.span);
+      const path = node.modulePath.map((p) => p.toLowerCase()).join("/");
+      return writeLine(w1, `import { ${node.names.join(", ")} } from "./${path}"`);
+    }),
+    Match.tag("Export", (node) => {
+      const w1 = recordMapping(w, node.span);
+      return writeLine(w1, `export { ${node.names.join(", ")} }`);
+    }),
     Match.exhaustive,
   );
 
@@ -276,15 +479,59 @@ const emitStatement = (w: WriterState, stmt: TypedAst.TypedStmt, decls: DeclMap)
 // Program generation
 // ---------------------------------------------------------------------------
 
+const exprContainsMatch = (expr: Ast.Expr): boolean =>
+  Match.value(expr).pipe(
+    Match.tag("MatchExpr", () => true),
+    Match.tag("BinaryExpr", (e) => exprContainsMatch(e.left) || exprContainsMatch(e.right)),
+    Match.tag("UnaryExpr", (e) => exprContainsMatch(e.expr)),
+    Match.tag(
+      "Block",
+      (e) => e.statements.some((s) => stmtContainsMatch(s)) || exprContainsMatch(e.expr),
+    ),
+    Match.tag("Lambda", (e) => exprContainsMatch(e.body)),
+    Match.tag("App", (e) => exprContainsMatch(e.func) || e.args.some(exprContainsMatch)),
+    Match.tag("Force", (e) => exprContainsMatch(e.expr)),
+    Match.orElse(() => false),
+  );
+
+const stmtContainsMatch = (stmt: Ast.Stmt): boolean =>
+  Match.value(stmt).pipe(
+    Match.tag("Declaration", (s) => exprContainsMatch(s.value)),
+    Match.tag("ExprStatement", (s) => exprContainsMatch(s.expr)),
+    Match.tag("ForceStatement", (s) => exprContainsMatch(s.expr)),
+    Match.orElse(() => false),
+  );
+
 const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const decls = collectDeclaredNames(program.statements);
   const hasForce = Arr.some(program.statements, (s) => s.node._tag === "ForceStatement");
-  const needsEffectImport = HashMap.size(decls) > 0 || hasForce;
+  const hasTypeDecl = Arr.some(program.statements, (s) => s.node._tag === "TypeDecl");
+  const hasMatch = Arr.some(program.statements, (s) => stmtContainsMatch(s.node));
+  const hasMut = Arr.some(
+    program.statements,
+    (s) => (s.node._tag === "Declaration" && s.node.mutable) || s.node._tag === "Mutation",
+  );
+  const needsEffectImport = HashMap.size(decls) > 0 || hasForce || hasMut;
+  const needsDataImport = hasTypeDecl;
+
+  // Collect mutable binding names for Ref.get emission
+  const mutNames = new Set<string>();
+  for (const s of program.statements) {
+    if (s.node._tag === "Declaration" && s.node.mutable) {
+      mutNames.add(s.node.name);
+    }
+  }
 
   // Start building output
-  const w0 = needsEffectImport
-    ? writeBlankLine(writeLine(emptyWriter, 'import { Effect } from "effect"'))
-    : emptyWriter;
+  const imports: string[] = [];
+  if (needsEffectImport) imports.push("Effect");
+  if (hasMut) imports.push("Ref");
+  if (needsDataImport) imports.push("Data");
+  if (hasMatch) imports.push("Match");
+  const w0 =
+    imports.length > 0
+      ? writeBlankLine(writeLine(emptyWriter, `import { ${imports.join(", ")} } from "effect"`))
+      : emptyWriter;
 
   // Emit declare wrappers
   const w1 = Arr.reduce(program.statements, w0, (w, stmt) =>
@@ -309,20 +556,32 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
     ),
   );
 
-  // Filter non-declare statements
-  const bodyStmts = Arr.filter(program.statements, (s) => s.node._tag !== "Declare");
+  // Emit user import statements at top level
+  const importStmts = Arr.filter(program.statements, (s) => s.node._tag === "Import");
+  const w1a = Arr.reduce(importStmts, w1, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
 
-  if (hasForce) {
+  // Filter non-declare, non-import, non-export statements for body
+  const bodyStmts = Arr.filter(
+    program.statements,
+    (s) => s.node._tag !== "Declare" && s.node._tag !== "Import" && s.node._tag !== "Export",
+  );
+
+  // Collect export statements for emission after body
+  const exportStmts = Arr.filter(program.statements, (s) => s.node._tag === "Export");
+
+  if (hasForce || hasMut) {
     // Wrap in Effect.gen + runPromise
-    const w2 = pushIndent(writeLine(w1, "const main = Effect.gen(function*() {"));
-    const w3 = Arr.reduce(bodyStmts, w2, (w, stmt) => emitStatement(w, stmt, decls));
+    const w2 = pushIndent(writeLine(w1a, "const main = Effect.gen(function*() {"));
+    const w3 = Arr.reduce(bodyStmts, w2, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
     const w4 = writeLine(popIndent(w3), "})");
     const w5 = writeLine(writeBlankLine(w4), "Effect.runPromise(main)");
-    return { code: writerToString(w5), sourceMap: w5.sourceMap };
+    const w6 = Arr.reduce(exportStmts, w5, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
+    return { code: writerToString(w6), sourceMap: w6.sourceMap };
   }
 
-  const w2 = Arr.reduce(bodyStmts, w1, (w, stmt) => emitStatement(w, stmt, decls));
-  return { code: writerToString(w2), sourceMap: w2.sourceMap };
+  const w2 = Arr.reduce(bodyStmts, w1a, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
+  const w3 = Arr.reduce(exportStmts, w2, (w, stmt) => emitStatement(w, stmt, decls, mutNames));
+  return { code: writerToString(w3), sourceMap: w3.sourceMap };
 };
 
 // ---------------------------------------------------------------------------

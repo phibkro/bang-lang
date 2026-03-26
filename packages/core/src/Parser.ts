@@ -130,6 +130,160 @@ const parseProgram = (s: ParseState): P<Ast.Program> =>
   });
 
 // ---------------------------------------------------------------------------
+// Type declarations
+// ---------------------------------------------------------------------------
+
+const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "type");
+    const [nameTok, s2] = yield* expect(s1, "TypeIdent");
+    const typeName = tokenValue(nameTok);
+
+    // Collect type params: lowercase Ident tokens until `=`
+    const collectParams = (
+      params: ReadonlyArray<string>,
+      st: ParseState,
+    ): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isEq = yield* check(st, "Operator", "=");
+        if (isEq) return [params, st] as const;
+        const [tok, st2] = yield* expect(st, "Ident");
+        return yield* collectParams([...params, tokenValue(tok)], st2);
+      });
+
+    const [typeParams, s3] = yield* collectParams([], s2);
+    const typeParamSet = new Set(typeParams);
+    const [, s4] = yield* expect(s3, "Operator", "=");
+
+    // Parse constructors separated by `|`
+    const collectConstructors = (
+      ctors: ReadonlyArray<Ast.Constructor>,
+      st: ParseState,
+    ): P<ReadonlyArray<Ast.Constructor>> =>
+      Effect.gen(function* () {
+        const [ctor, st2] = yield* parseConstructor(st, typeParamSet);
+        const newCtors = [...ctors, ctor];
+        const hasPipe = yield* check(st2, "Delimiter", "|");
+        if (!hasPipe) return [newCtors, st2] as const;
+        const [, st3] = yield* advance(st2); // consume |
+        return yield* collectConstructors(newCtors, st3);
+      });
+
+    const [constructors, s5] = yield* collectConstructors([], s4);
+    const lastCtor = constructors[constructors.length - 1];
+    const endSpan = lastCtor !== undefined ? lastCtor.span : tokenSpan(nameTok);
+    return [
+      new Ast.TypeDecl({
+        name: typeName,
+        typeParams: [...typeParams],
+        constructors: [...constructors],
+        span: Span.merge(tokenSpan(startTok), endSpan),
+      }),
+      s5,
+    ] as const;
+  });
+
+const parseConstructor = (s: ParseState, typeParamNames: ReadonlySet<string>): P<Ast.Constructor> =>
+  Effect.gen(function* () {
+    const [nameTok, s1] = yield* expect(s, "TypeIdent");
+    const ctorName = tokenValue(nameTok);
+
+    // Check for named fields: `{`
+    const isBrace = yield* check(s1, "Delimiter", "{");
+    if (isBrace) {
+      const [, s2] = yield* advance(s1); // consume {
+      const collectFields = (
+        fields: ReadonlyArray<{ readonly name: string; readonly type: Ast.Type }>,
+        st: ParseState,
+      ): P<ReadonlyArray<{ readonly name: string; readonly type: Ast.Type }>> =>
+        Effect.gen(function* () {
+          const isClose = yield* check(st, "Delimiter", "}");
+          if (isClose) return [fields, st] as const;
+          // Consume comma between fields if present
+          if (fields.length > 0) {
+            const hasComma = yield* check(st, "Delimiter", ",");
+            if (hasComma) {
+              const [, st2] = yield* advance(st);
+              st = st2;
+            }
+          }
+          const [fieldNameTok, st2] = yield* expect(st, "Ident");
+          const [, st3] = yield* expect(st2, "Delimiter", ":");
+          const [fieldType, st4] = yield* parsePrimaryType(st3);
+          return yield* collectFields(
+            [...fields, { name: tokenValue(fieldNameTok), type: fieldType }],
+            st4,
+          );
+        });
+
+      const [fields, s3] = yield* collectFields([], s2);
+      const [endTok, s4] = yield* expect(s3, "Delimiter", "}");
+      return [
+        new Ast.NamedConstructor({
+          tag: ctorName,
+          fields: [...fields],
+          span: Span.merge(tokenSpan(nameTok), tokenSpan(endTok)),
+        }),
+        s4,
+      ] as const;
+    }
+
+    // Positional fields: collect TypeIdent tokens and type-param Ident tokens
+    // Stop at `|`, `;`, `}`, EOF, any Keyword, any Operator
+    const collectPositional = (
+      fields: ReadonlyArray<Ast.Type>,
+      st: ParseState,
+    ): P<ReadonlyArray<Ast.Type>> =>
+      Effect.gen(function* () {
+        const atEnd = yield* isAtEnd(st);
+        if (atEnd) return [fields, st] as const;
+        const t = yield* peek(st);
+        const tag = tokenTag(t);
+        // Stop tokens
+        if (tag === "Keyword" || tag === "Operator") return [fields, st] as const;
+        if (tag === "Delimiter") {
+          const v = tokenValue(t);
+          if (v === "|" || v === ";" || v === "}") return [fields, st] as const;
+        }
+        // Accept TypeIdent
+        if (tag === "TypeIdent") {
+          const [tok, st2] = yield* advance(st);
+          const ty = new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) });
+          return yield* collectPositional([...fields, ty], st2);
+        }
+        // Accept Ident only if it's a type param
+        if (tag === "Ident" && typeParamNames.has(tokenValue(t))) {
+          const [tok, st2] = yield* advance(st);
+          const ty = new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) });
+          return yield* collectPositional([...fields, ty], st2);
+        }
+        // Anything else (including non-type-param Ident) — stop
+        return [fields, st] as const;
+      });
+
+    const [fields, s2] = yield* collectPositional([], s1);
+    if (fields.length === 0) {
+      return [
+        new Ast.NullaryConstructor({
+          tag: ctorName,
+          span: tokenSpan(nameTok),
+        }),
+        s2,
+      ] as const;
+    }
+    // fields.length > 0 guaranteed by the `if (fields.length === 0)` guard above
+    const lastField = fields[fields.length - 1] as Ast.Type;
+    return [
+      new Ast.PositionalConstructor({
+        tag: ctorName,
+        fields: [...fields],
+        span: Span.merge(tokenSpan(nameTok), lastField.span),
+      }),
+      s2,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
 // Statement dispatch
 // ---------------------------------------------------------------------------
 
@@ -137,15 +291,20 @@ const parseStatement = (s: ParseState): P<Ast.Stmt> =>
   Effect.gen(function* () {
     const t = yield* peek(s);
 
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "from") return yield* parseImport(s);
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "export") return yield* parseExport(s);
     if (tokenTag(t) === "Keyword" && tokenValue(t) === "declare") return yield* parseDeclare(s);
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "type") return yield* parseTypeDecl(s);
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "mut") return yield* parseMutDeclaration(s);
     if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return yield* parseForceStatement(s);
     if (tokenTag(t) === "Ident") {
       return yield* Option.match(peekAt(s, 1), {
         onNone: () => parseExprStatement(s),
-        onSome: (next) =>
-          tokenTag(next) === "Operator" && tokenValue(next) === "="
-            ? parseDeclaration(s)
-            : parseExprStatement(s),
+        onSome: (next) => {
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "=") return parseDeclaration(s);
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "<-") return parseMutation(s);
+          return parseExprStatement(s);
+        },
       });
     }
 
@@ -210,6 +369,129 @@ const parseDeclaration = (s: ParseState): P<Ast.Declaration> =>
   });
 
 // ---------------------------------------------------------------------------
+// Mut declaration
+// ---------------------------------------------------------------------------
+
+const parseMutDeclaration = (s: ParseState): P<Ast.Declaration> =>
+  Effect.gen(function* () {
+    const [mutTok, s1] = yield* expect(s, "Keyword", "mut");
+    const [nameTok, s2] = yield* expect(s1, "Ident");
+    const [, s3] = yield* expect(s2, "Operator", "=");
+    const [value, s4] = yield* parseExpr(s3);
+    return [
+      new Ast.Declaration({
+        name: tokenValue(nameTok),
+        mutable: true,
+        value,
+        typeAnnotation: Option.none(),
+        span: Span.merge(tokenSpan(mutTok), value.span),
+      }),
+      s4,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
+// Mutation statement
+// ---------------------------------------------------------------------------
+
+const parseMutation = (s: ParseState): P<Ast.Mutation> =>
+  Effect.gen(function* () {
+    const [nameTok, s1] = yield* expect(s, "Ident");
+    const [, s2] = yield* expect(s1, "Operator", "<-");
+    const [value, s3] = yield* parseExpr(s2);
+    return [
+      new Ast.Mutation({
+        target: tokenValue(nameTok),
+        value,
+        span: Span.merge(tokenSpan(nameTok), value.span),
+      }),
+      s3,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+
+const parseImport = (s: ParseState): P<Ast.Import> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "from");
+
+    // Parse module path: TypeIdent separated by `.`
+    const [firstMod, s2] = yield* expect(s1, "TypeIdent");
+    const collectPath = (parts: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isDot = yield* check(st, "Operator", ".");
+        if (!isDot) return [parts, st] as const;
+        const [, st2] = yield* advance(st); // consume .
+        const [seg, st3] = yield* expect(st2, "TypeIdent");
+        return yield* collectPath([...parts, tokenValue(seg)], st3);
+      });
+    const [modulePath, s3] = yield* collectPath([tokenValue(firstMod)], s2);
+
+    const [, s4] = yield* expect(s3, "Keyword", "import");
+    const [, s5] = yield* expect(s4, "Delimiter", "{");
+
+    // Parse comma-separated Ident names
+    const collectNames = (names: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isClose = yield* check(st, "Delimiter", "}");
+        if (isClose) return [names, st] as const;
+        if (names.length > 0) {
+          const [, st2] = yield* expect(st, "Delimiter", ",");
+          st = st2;
+        }
+        const [nameTok, st2] = yield* expect(st, "Ident");
+        return yield* collectNames([...names, tokenValue(nameTok)], st2);
+      });
+
+    const [names, s6] = yield* collectNames([], s5);
+    const [endTok, s7] = yield* expect(s6, "Delimiter", "}");
+
+    return [
+      new Ast.Import({
+        modulePath: [...modulePath],
+        names: [...names],
+        span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
+      }),
+      s7,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+const parseExport = (s: ParseState): P<Ast.Export> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "export");
+    const [, s2] = yield* expect(s1, "Delimiter", "{");
+
+    const collectNames = (names: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isClose = yield* check(st, "Delimiter", "}");
+        if (isClose) return [names, st] as const;
+        if (names.length > 0) {
+          const [, st2] = yield* expect(st, "Delimiter", ",");
+          st = st2;
+        }
+        const [nameTok, st2] = yield* expect(st, "Ident");
+        return yield* collectNames([...names, tokenValue(nameTok)], st2);
+      });
+
+    const [names, s3] = yield* collectNames([], s2);
+    const [endTok, s4] = yield* expect(s3, "Delimiter", "}");
+
+    return [
+      new Ast.Export({
+        names: [...names],
+        span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
+      }),
+      s4,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
 // Force statement
 // ---------------------------------------------------------------------------
 
@@ -238,7 +520,6 @@ const parseExprStatement = (s: ParseState): P<Ast.ExprStatement> =>
 // Expressions — Pratt parser (precedence climbing)
 // ---------------------------------------------------------------------------
 
-const PREC_MUT = 1;
 const PREC_XOR = 4;
 const PREC_OR = 5;
 const PREC_AND = 6;
@@ -249,7 +530,6 @@ const PREC_UNARY = 10;
 const PREC_APP = 11;
 
 const BINARY_PREC: Record<string, number> = {
-  "<-": PREC_MUT,
   xor: PREC_XOR,
   or: PREC_OR,
   and: PREC_AND,
@@ -267,7 +547,7 @@ const BINARY_PREC: Record<string, number> = {
   "%": PREC_MUL,
 };
 
-const RIGHT_ASSOC = new Set(["<-"]);
+const RIGHT_ASSOC = new Set<string>();
 
 const getBinaryPrec = (t: Token): number | undefined => {
   const tag = tokenTag(t);
@@ -565,6 +845,10 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
       return [new Ast.UnitLiteral({ span: tokenSpan(tok) }), s1] as const;
     }
 
+    if (tag === "Keyword" && tokenValue(t) === "match") {
+      return yield* parseMatch(s);
+    }
+
     if (tag === "Delimiter" && tokenValue(t) === "{") {
       return yield* parseBlock(s);
     }
@@ -578,6 +862,146 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
     }
 
     return yield* fail(`Expected expression, got ${tokenDescription(t)}`, s);
+  });
+
+// ---------------------------------------------------------------------------
+// Match expression
+// ---------------------------------------------------------------------------
+
+const parseMatch = (s: ParseState): P<Ast.MatchExpr> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "match");
+    // Parse scrutinee at high precedence to avoid consuming `{`
+    const [scrutinee, s2] = yield* parseExprPrec(s1, PREC_APP + 1);
+    const [, s3] = yield* expect(s2, "Delimiter", "{");
+
+    // Parse arms separated by commas until `}`
+    const collectArms = (arms: ReadonlyArray<Ast.Arm>, st: ParseState): P<ReadonlyArray<Ast.Arm>> =>
+      Effect.gen(function* () {
+        const isClose = yield* check(st, "Delimiter", "}");
+        if (isClose) return [arms, st] as const;
+        const [arm, st2] = yield* parseArm(st);
+        const newArms = [...arms, arm];
+        // Consume optional comma
+        const hasComma = yield* check(st2, "Delimiter", ",");
+        if (hasComma) {
+          const [, st3] = yield* advance(st2);
+          return yield* collectArms(newArms, st3);
+        }
+        return [newArms, st2] as const;
+      });
+
+    const [arms, s4] = yield* collectArms([], s3);
+    const [endTok, s5] = yield* expect(s4, "Delimiter", "}");
+    return [
+      new Ast.MatchExpr({
+        scrutinee,
+        arms: [...arms],
+        span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
+      }),
+      s5,
+    ] as const;
+  });
+
+const parseArm = (s: ParseState): P<Ast.Arm> =>
+  Effect.gen(function* () {
+    const [pattern, s1] = yield* parsePattern(s);
+    const [, s2] = yield* expect(s1, "Operator", "->");
+    const [body, s3] = yield* parseExpr(s2);
+    return [
+      new Ast.Arm({
+        pattern,
+        body,
+        span: Span.merge(pattern.span, body.span),
+      }),
+      s3,
+    ] as const;
+  });
+
+const isPatternTerminator = (t: Token): boolean => {
+  const tag = tokenTag(t);
+  if (tag === "Operator" && tokenValue(t) === "->") return true;
+  if (tag === "Delimiter") {
+    const v = tokenValue(t);
+    return v === "," || v === "}";
+  }
+  if (tag === "EOF") return true;
+  return false;
+};
+
+const parsePattern = (s: ParseState): P<Ast.Pattern> =>
+  Effect.gen(function* () {
+    const t = yield* peek(s);
+    const tag = tokenTag(t);
+
+    // Wildcard: _
+    if (tag === "Ident" && tokenValue(t) === "_") {
+      const [tok, s1] = yield* advance(s);
+      return [new Ast.WildcardPattern({ span: tokenSpan(tok) }), s1] as const;
+    }
+
+    // Constructor: TypeIdent followed by sub-patterns
+    if (tag === "TypeIdent") {
+      const [tok, s1] = yield* advance(s);
+      const ctorName = tokenValue(tok);
+      // Collect sub-patterns until we hit a terminator
+      const collectSubPatterns = (
+        pats: ReadonlyArray<Ast.Pattern>,
+        st: ParseState,
+      ): P<ReadonlyArray<Ast.Pattern>> =>
+        Effect.gen(function* () {
+          const atEnd = yield* isAtEnd(st);
+          if (atEnd) return [pats, st] as const;
+          const next = yield* peek(st);
+          if (isPatternTerminator(next)) return [pats, st] as const;
+          const [subPat, st2] = yield* parsePattern(st);
+          return yield* collectSubPatterns([...pats, subPat], st2);
+        });
+
+      const [subPatterns, s2] = yield* collectSubPatterns([], s1);
+      const endSpan =
+        subPatterns.length > 0
+          ? (subPatterns[subPatterns.length - 1] as Ast.Pattern).span
+          : tokenSpan(tok);
+      return [
+        new Ast.ConstructorPattern({
+          tag: ctorName,
+          patterns: [...subPatterns],
+          span: Span.merge(tokenSpan(tok), endSpan),
+        }),
+        s2,
+      ] as const;
+    }
+
+    // Literal patterns
+    if (tag === "IntLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.IntLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "FloatLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.FloatLiteral({ value: Number(tokenValue(tok)), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "StringLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.StringLiteral({ value: tokenValue(tok), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+    if (tag === "BoolLit") {
+      const [tok, s1] = yield* advance(s);
+      const lit = new Ast.BoolLiteral({ value: tokenBoolValue(tok), span: tokenSpan(tok) });
+      return [new Ast.LiteralPattern({ value: lit, span: tokenSpan(tok) }), s1] as const;
+    }
+
+    // Binding: lowercase Ident (not _)
+    if (tag === "Ident") {
+      const [tok, s1] = yield* advance(s);
+      return [new Ast.BindingPattern({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
+
+    return yield* fail(`Expected pattern, got ${tokenDescription(t)}`, s);
   });
 
 // ---------------------------------------------------------------------------
@@ -626,14 +1050,16 @@ const parseBlockItem = (s: ParseState): P<Ast.Stmt> =>
   Effect.gen(function* () {
     const t = yield* peek(s);
 
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "mut") return yield* parseMutDeclaration(s);
     if (tokenTag(t) === "Operator" && tokenValue(t) === "!") return yield* parseForceStatement(s);
     if (tokenTag(t) === "Ident") {
       return yield* Option.match(peekAt(s, 1), {
         onNone: () => parseExprStatement(s),
-        onSome: (next) =>
-          tokenTag(next) === "Operator" && tokenValue(next) === "="
-            ? parseDeclaration(s)
-            : parseExprStatement(s),
+        onSome: (next) => {
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "=") return parseDeclaration(s);
+          if (tokenTag(next) === "Operator" && tokenValue(next) === "<-") return parseMutation(s);
+          return parseExprStatement(s);
+        },
       });
     }
 
@@ -667,6 +1093,11 @@ const parsePrimaryType = (s: ParseState): P<Ast.Type> =>
     if (tokenTag(t) === "TypeIdent" && tokenValue(t) === "Effect") return yield* parseEffectType(s);
 
     if (tokenTag(t) === "TypeIdent") {
+      const [tok, s1] = yield* advance(s);
+      return [new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
+    }
+
+    if (tokenTag(t) === "Ident") {
       const [tok, s1] = yield* advance(s);
       return [new Ast.ConcreteType({ name: tokenValue(tok), span: tokenSpan(tok) }), s1] as const;
     }
