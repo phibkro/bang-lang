@@ -180,6 +180,17 @@ describe("Mutation", () => {
     }),
   );
 
+  it.effect("codegen hoists Ref.get for mut reads in expressions", () =>
+    Effect.gen(function* () {
+      const code = yield* compileSource("y = { mut x = 0; x <- x + 1; x }");
+      // Should NOT contain "yield* Ref.get(x) + 1" inline (invalid JS in generators)
+      // Should contain a hoisted read like "const _x = yield* Ref.get(x)"
+      expect(code).not.toContain("Ref.get(x) +");
+      expect(code).toContain("const _x = yield* Ref.get(x)");
+      expect(code).toContain("Ref.set(x,");
+    }),
+  );
+
   // -------------------------------------------------------------------------
   // Formatter
   // -------------------------------------------------------------------------

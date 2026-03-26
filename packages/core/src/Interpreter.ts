@@ -231,12 +231,8 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
         return env;
       }),
     ),
-    Match.tag("Import", (s) =>
-      Effect.fail(new EvalError({ message: "Import not yet implemented", span: s.span })),
-    ),
-    Match.tag("Export", (s) =>
-      Effect.fail(new EvalError({ message: "Export not yet implemented", span: s.span })),
-    ),
+    Match.tag("Import", () => Effect.succeed(env)),
+    Match.tag("Export", () => Effect.succeed(env)),
     Match.exhaustive,
   );
 

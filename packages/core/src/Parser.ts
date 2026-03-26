@@ -291,6 +291,8 @@ const parseStatement = (s: ParseState): P<Ast.Stmt> =>
   Effect.gen(function* () {
     const t = yield* peek(s);
 
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "from") return yield* parseImport(s);
+    if (tokenTag(t) === "Keyword" && tokenValue(t) === "export") return yield* parseExport(s);
     if (tokenTag(t) === "Keyword" && tokenValue(t) === "declare") return yield* parseDeclare(s);
     if (tokenTag(t) === "Keyword" && tokenValue(t) === "type") return yield* parseTypeDecl(s);
     if (tokenTag(t) === "Keyword" && tokenValue(t) === "mut") return yield* parseMutDeclaration(s);
@@ -404,6 +406,88 @@ const parseMutation = (s: ParseState): P<Ast.Mutation> =>
         span: Span.merge(tokenSpan(nameTok), value.span),
       }),
       s3,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+
+const parseImport = (s: ParseState): P<Ast.Import> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "from");
+
+    // Parse module path: TypeIdent separated by `.`
+    const [firstMod, s2] = yield* expect(s1, "TypeIdent");
+    const collectPath = (parts: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isDot = yield* check(st, "Operator", ".");
+        if (!isDot) return [parts, st] as const;
+        const [, st2] = yield* advance(st); // consume .
+        const [seg, st3] = yield* expect(st2, "TypeIdent");
+        return yield* collectPath([...parts, tokenValue(seg)], st3);
+      });
+    const [modulePath, s3] = yield* collectPath([tokenValue(firstMod)], s2);
+
+    const [, s4] = yield* expect(s3, "Keyword", "import");
+    const [, s5] = yield* expect(s4, "Delimiter", "{");
+
+    // Parse comma-separated Ident names
+    const collectNames = (names: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isClose = yield* check(st, "Delimiter", "}");
+        if (isClose) return [names, st] as const;
+        if (names.length > 0) {
+          const [, st2] = yield* expect(st, "Delimiter", ",");
+          st = st2;
+        }
+        const [nameTok, st2] = yield* expect(st, "Ident");
+        return yield* collectNames([...names, tokenValue(nameTok)], st2);
+      });
+
+    const [names, s6] = yield* collectNames([], s5);
+    const [endTok, s7] = yield* expect(s6, "Delimiter", "}");
+
+    return [
+      new Ast.Import({
+        modulePath: [...modulePath],
+        names: [...names],
+        span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
+      }),
+      s7,
+    ] as const;
+  });
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+const parseExport = (s: ParseState): P<Ast.Export> =>
+  Effect.gen(function* () {
+    const [startTok, s1] = yield* expect(s, "Keyword", "export");
+    const [, s2] = yield* expect(s1, "Delimiter", "{");
+
+    const collectNames = (names: ReadonlyArray<string>, st: ParseState): P<ReadonlyArray<string>> =>
+      Effect.gen(function* () {
+        const isClose = yield* check(st, "Delimiter", "}");
+        if (isClose) return [names, st] as const;
+        if (names.length > 0) {
+          const [, st2] = yield* expect(st, "Delimiter", ",");
+          st = st2;
+        }
+        const [nameTok, st2] = yield* expect(st, "Ident");
+        return yield* collectNames([...names, tokenValue(nameTok)], st2);
+      });
+
+    const [names, s3] = yield* collectNames([], s2);
+    const [endTok, s4] = yield* expect(s3, "Delimiter", "}");
+
+    return [
+      new Ast.Export({
+        names: [...names],
+        span: Span.merge(tokenSpan(startTok), tokenSpan(endTok)),
+      }),
+      s4,
     ] as const;
   });
 

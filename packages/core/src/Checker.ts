@@ -94,12 +94,7 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
       ),
       Match.tag("TypeDecl", (s) =>
         Arr.reduce(s.constructors, acc, (scope, ctor) => {
-          const ctorTag =
-            ctor._tag === "NullaryConstructor"
-              ? ctor.tag
-              : ctor._tag === "PositionalConstructor"
-                ? ctor.tag
-                : ctor.tag;
+          const ctorTag = ctor.tag;
           return HashMap.set(scope, ctorTag, {
             name: ctorTag,
             type: Option.none(),
@@ -107,6 +102,16 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
             mutable: false,
           });
         }),
+      ),
+      Match.tag("Import", (s) =>
+        Arr.reduce(s.names, acc, (scope, name) =>
+          HashMap.set(scope, name, {
+            name,
+            type: Option.none(),
+            effectClass: "signal" as const,
+            mutable: false,
+          }),
+        ),
       ),
       Match.orElse(() => acc),
     ),
@@ -157,6 +162,8 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       const stmtHasEffect = e.statements.some(
         (s) =>
           s._tag === "ForceStatement" ||
+          s._tag === "Mutation" ||
+          (s._tag === "Declaration" && s.mutable) ||
           (s._tag === "Declaration" && classifyExpr(s.value, blockScope) === "effect"),
       );
       const exprClass = classifyExpr(e.expr, blockScope);
@@ -376,7 +383,19 @@ const checkStmt = (
       Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
     ),
     Match.tag("Export", (s) =>
-      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+      Effect.gen(function* () {
+        for (const name of s.names) {
+          if (!HashMap.has(scope, name)) {
+            return yield* Effect.fail(
+              new CheckError({
+                message: `Exported name not in scope: ${name}`,
+                span: s.span,
+              }),
+            );
+          }
+        }
+        return annotate(s, { type: unknownType, effectClass: "signal" as const });
+      }),
     ),
     Match.exhaustive,
   );

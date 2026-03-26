@@ -229,7 +229,10 @@ export class PositionalConstructor extends Schema.TaggedClass<PositionalConstruc
 export class NamedConstructor extends Schema.TaggedClass<NamedConstructor>()("NamedConstructor", {
   tag: Schema.String,
   fields: Schema.Array(
-    Schema.Struct({ name: Schema.String, type: Schema.suspend((): Schema.Schema<Type> => TypeSchema) }),
+    Schema.Struct({
+      name: Schema.String,
+      type: Schema.suspend((): Schema.Schema<Type> => TypeSchema),
+    }),
   ),
   span: Span,
 }) {}
