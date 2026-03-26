@@ -43,54 +43,52 @@ packages/core/test/
 - [ ] **Step 1: Create Value.ts with Schema.TaggedClass types**
 
 ```typescript
-import { Schema } from "effect"
+import { Data, HashMap } from "effect"
+import type * as Ast from "./Ast.js"
 
-export class Num extends Schema.TaggedClass<Num>()("Num", {
-  value: Schema.Number,
-}) {}
+// Data.TaggedEnum — lightweight, no Schema validation overhead.
+// Gives Match.tag, structural equality, zero-cost construction.
+// Schema.TaggedClass is unnecessary: values are internal, never
+// serialized or generated via Arbitrary.
+export type Value = Data.TaggedEnum<{
+  Num: { readonly value: number }
+  Str: { readonly value: string }
+  Bool: { readonly value: boolean }
+  Unit: {}
+  Closure: {
+    readonly params: ReadonlyArray<string>
+    readonly body: Ast.Expr
+    readonly env: HashMap.HashMap<string, Value>
+  }
+}>
 
-export class Str extends Schema.TaggedClass<Str>()("Str", {
-  value: Schema.String,
-}) {}
+export const { Num, Str, Bool, Unit, Closure, $match } = Data.taggedEnum<Value>()
+```
 
-export class Bool extends Schema.TaggedClass<Bool>()("Bool", {
-  value: Schema.Boolean,
-}) {}
-
-export class Unit extends Schema.TaggedClass<Unit>()("Unit", {}) {}
-
-export class Closure extends Schema.TaggedClass<Closure>()("Closure", {
-  params: Schema.Array(Schema.String),
-  body: Schema.Any,   // Ast.Expr — use Any to avoid circular Schema refs
-  env: Schema.Any,    // HashMap<string, Value> — structural equality not needed for closures
-}) {}
-
-export type Value = Num | Str | Bool | Unit | Closure
-
+Helpers in the same file:
+```typescript
 // Extract interpreter Value to JS primitive (for correctness comparison)
 export const toJS = (v: Value): unknown =>
-  Match.value(v).pipe(
-    Match.tag("Num", (n) => n.value),
-    Match.tag("Str", (s) => s.value),
-    Match.tag("Bool", (b) => b.value),
-    Match.tag("Unit", () => undefined),
-    Match.tag("Closure", () => { throw new Error("Cannot convert Closure to JS") }),
-    Match.exhaustive,
-  )
+  $match(v, {
+    Num: (n) => n.value,
+    Str: (s) => s.value,
+    Bool: (b) => b.value,
+    Unit: () => undefined,
+    Closure: () => { throw new Error("Cannot convert Closure to JS") },
+  })
 
 // Coerce Value to string (for string interpolation)
 export const coerceToString = (v: Value): Effect<string, EvalError> =>
-  Match.value(v).pipe(
-    Match.tag("Num", (n) => Effect.succeed(String(n.value))),
-    Match.tag("Str", (s) => Effect.succeed(s.value)),
-    Match.tag("Bool", (b) => Effect.succeed(String(b.value))),
-    Match.tag("Unit", () => Effect.succeed("()")),
-    Match.tag("Closure", () => Effect.fail(new EvalError({ message: "Cannot coerce closure to string", span: Span.empty }))),
-    Match.exhaustive,
-  )
+  $match(v, {
+    Num: (n) => Effect.succeed(String(n.value)),
+    Str: (s) => Effect.succeed(s.value),
+    Bool: (b) => Effect.succeed(String(b.value)),
+    Unit: () => Effect.succeed("()"),
+    Closure: () => Effect.fail(new EvalError({ message: "Cannot coerce closure to string", span: Span.empty })),
+  })
 ```
 
-Add `EvalError` to Value.ts or CompilerError.ts:
+Add `EvalError` (Schema.TaggedError — errors DO cross boundaries):
 ```typescript
 export class EvalError extends Schema.TaggedError<EvalError>()("EvalError", {
   message: Schema.String,
@@ -139,7 +137,7 @@ describe("Interpreter", () => {
   it.effect("evaluates integer literal", () =>
     Effect.gen(function*() {
       const result = yield* Interpreter.evalExpr(new Ast.IntLiteral({ value: 42, span: s }), emptyEnv)
-      expect(result).toEqual(new Value.Num({ value: 42 }))
+      expect(result).toEqual(Value.Num({ value: 42 }))
     })
   )
 
@@ -152,7 +150,7 @@ describe("Interpreter", () => {
         span: s,
       })
       const result = yield* Interpreter.evalExpr(expr, emptyEnv)
-      expect(result).toEqual(new Value.Num({ value: 3 }))
+      expect(result).toEqual(Value.Num({ value: 3 }))
     })
   )
 
@@ -165,7 +163,7 @@ describe("Interpreter", () => {
         span: s,
       })
       const result = yield* Interpreter.evalExpr(expr, emptyEnv)
-      expect(result).toEqual(new Value.Bool({ value: true }))
+      expect(result).toEqual(Value.Bool({ value: true }))
     })
   )
 
@@ -177,7 +175,7 @@ describe("Interpreter", () => {
         span: s,
       })
       const result = yield* Interpreter.evalExpr(expr, emptyEnv)
-      expect(result).toEqual(new Value.Num({ value: -5 }))
+      expect(result).toEqual(Value.Num({ value: -5 }))
     })
   )
 
@@ -190,7 +188,7 @@ describe("Interpreter", () => {
         span: s,
       })
       const result = yield* Interpreter.evalExpr(expr, emptyEnv)
-      expect(result).toEqual(new Value.Str({ value: "hello world" }))
+      expect(result).toEqual(Value.Str({ value: "hello world" }))
     })
   )
 
@@ -298,7 +296,7 @@ it.effect("evaluates block with bindings", () =>
       span: s,
     })
     const result = yield* Interpreter.evalExpr(block, emptyEnv)
-    expect(result).toEqual(new Value.Num({ value: 3 }))
+    expect(result).toEqual(Value.Num({ value: 3 }))
   })
 )
 
@@ -312,7 +310,7 @@ it.effect("evaluates lambda and application", () =>
     }), span: s })
     const app = new Ast.App({ func: lambda, args: [new Ast.IntLiteral({ value: 5, span: s })], span: s })
     const result = yield* Interpreter.evalExpr(app, emptyEnv)
-    expect(result).toEqual(new Value.Num({ value: 10 }))
+    expect(result).toEqual(Value.Num({ value: 10 }))
   })
 )
 
@@ -359,7 +357,7 @@ git commit --no-verify -m "feat(core): interpreter — blocks, lambdas, curried 
 ```typescript
 it.effect("evaluates string interpolation", () =>
   Effect.gen(function*() {
-    const env = HashMap.set(emptyEnv, "name", new Value.Str({ value: "world" }))
+    const env = HashMap.set(emptyEnv, "name", Value.Str({ value: "world" }))
     const interp = new Ast.StringInterp({
       parts: [
         new Ast.InterpText({ value: "hello " }),
@@ -368,7 +366,7 @@ it.effect("evaluates string interpolation", () =>
       span: s,
     })
     const result = yield* Interpreter.evalExpr(interp, env)
-    expect(result).toEqual(new Value.Str({ value: "hello world" }))
+    expect(result).toEqual(Value.Str({ value: "hello world" }))
   })
 )
 
@@ -379,7 +377,7 @@ it.effect("evaluates a full program", () =>
     const tokens = yield* Lexer.tokenize(source)
     const ast = yield* Parser.parse(tokens)
     const result = yield* Interpreter.evalProgram(ast)
-    expect(result).toEqual(new Value.Num({ value: 7 }))
+    expect(result).toEqual(Value.Num({ value: 7 }))
   })
 )
 ```
