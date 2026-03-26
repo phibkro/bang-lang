@@ -77,8 +77,8 @@ const formatBinaryExpr = (e: Ast.BinaryExpr): Doc.Doc<never> => {
 };
 
 const formatUnaryExpr = (e: Ast.UnaryExpr): Doc.Doc<never> => {
-  if (e.op === "not") return Doc.catWithSpace(Doc.text("not"), formatExpr(e.expr));
-  return Doc.cat(Doc.text(e.op), formatExpr(e.expr));
+  if (e.op === "not") return Doc.catWithSpace(Doc.text("not"), parenIfNonAtom(e.expr));
+  return Doc.cat(Doc.text(e.op), parenIfNonAtom(e.expr));
 };
 
 const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
