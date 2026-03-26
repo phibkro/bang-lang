@@ -150,6 +150,21 @@ const collectDeclaredNames = (statements: ReadonlyArray<TypedAst.TypedStmt>): De
   );
 
 // ---------------------------------------------------------------------------
+// Block statement emission (pure string, no WriterState)
+// ---------------------------------------------------------------------------
+
+const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap): string =>
+  Match.value(stmt).pipe(
+    Match.tag("Declaration", (s) => `const ${s.name} = ${emitExpr(s.value, decls)}`),
+    Match.tag("ForceStatement", (s) =>
+      s.expr._tag === "Force" ? `yield* ${emitExpr(s.expr.expr, decls)}` : `yield* ${emitExpr(s.expr, decls)}`,
+    ),
+    Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls)),
+    Match.tag("Declare", () => ""),
+    Match.exhaustive,
+  );
+
+// ---------------------------------------------------------------------------
 // Expression emission (pure string building)
 // ---------------------------------------------------------------------------
 
@@ -208,19 +223,16 @@ const emitExpr = (expr: Ast.Expr, decls: DeclMap): string =>
         return emitExpr(e.expr, decls);
       }
       const stmtLines = e.statements.map((stmt) => {
-        // Reuse emitStatement logic but extract just the text
-        const w = emitStatement(emptyWriter, { node: stmt, annotation: {} as any }, decls);
-        return w.lines.map((l) => `  ${l}`).join("\n");
+        const line = emitBlockStmt(stmt, decls);
+        return `  ${line}`;
       });
       const returnLine = `  return ${emitExpr(e.expr, decls)}`;
       const body = [...stmtLines, returnLine].join("\n");
       return `Effect.gen(function*() {\n${body}\n})`;
     }),
     Match.tag("Lambda", (e) => {
-      // Emit body: if Block with no statements, emit expr directly; otherwise Effect.gen
-      const bodyCode = e.body._tag === "Block" ? emitExpr(e.body, decls) : emitExpr(e.body, decls);
-      // Build curried: (a) => (b) => bodyCode
-      return e.params.reduceRight((inner, param) => `(${param}) => ${inner}`, bodyCode);
+      const bodyCode = emitExpr(e.body, decls);
+      return Arr.reduceRight(e.params, bodyCode, (inner, param) => `(${param}) => ${inner}`);
     }),
     Match.tag("StringInterp", (e) => {
       const inner = e.parts

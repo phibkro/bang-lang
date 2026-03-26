@@ -149,7 +149,8 @@ const parseStatement = (s: ParseState): P<Ast.Stmt> =>
       });
     }
 
-    return yield* fail(`Unexpected token at statement position: ${tokenDescription(t)}`, s);
+    // Any other expression-starting token (blocks, grouped, literals, unary ops)
+    return yield* parseExprStatement(s);
   });
 
 // ---------------------------------------------------------------------------
