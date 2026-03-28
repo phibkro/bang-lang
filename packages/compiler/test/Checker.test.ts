@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Lexer, Parser, Checker } from "@bang/core";
+import { Lexer, Parser } from "@bang/core";
+import { Checker } from "@bang/compiler";
 
 const check = (source: string) =>
   Effect.gen(function* () {

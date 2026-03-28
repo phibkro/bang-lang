@@ -1,9 +1,9 @@
 import { Array as Arr, Effect, HashMap, Match, Option } from "effect";
-import type * as Ast from "./Ast.js";
-import type { CompilerError } from "./CompilerError.js";
-import { CodegenError } from "./CompilerError.js";
+import type * as Ast from "@bang/core/Ast";
+import type { CompilerError } from "@bang/core/CompilerError";
+import { CodegenError } from "@bang/core/CompilerError";
 import * as SourceMap from "./SourceMap.js";
-import * as Span from "./Span.js";
+import * as Span from "@bang/core/Span";
 import type * as TypedAst from "./TypedAst.js";
 
 // ---------------------------------------------------------------------------

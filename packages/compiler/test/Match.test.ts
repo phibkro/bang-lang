@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Compiler, Formatter, Interpreter, Lexer, Parser, Value } from "@bang/core";
+import { Formatter, Interpreter, Lexer, Parser, Value } from "@bang/core";
+import { Compiler } from "@bang/compiler";
 
 describe("Match parsing", () => {
   const parseSource = (src: string) =>

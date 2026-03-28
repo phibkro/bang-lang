@@ -1,5 +1,5 @@
 import { HashMap, Option } from "effect";
-import type { Span } from "./Span.js";
+import type { Span } from "@bang/core/Span";
 
 export interface TSPosition {
   readonly line: number;

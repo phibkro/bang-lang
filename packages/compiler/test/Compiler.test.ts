@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Compiler } from "@bang/core";
+import { Compiler } from "@bang/compiler";
 
 describe("Compiler", () => {
   it.effect("compiles the v0.1 target program end-to-end", () =>

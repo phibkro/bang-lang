@@ -1,20 +1,17 @@
 {
-  "name": "@bang/cli",
+  "name": "@bang/compiler",
   "version": "0.0.1",
-  "bin": {
-    "bang": "./src/index.ts"
-  },
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
   "scripts": {
     "test": "vitest",
     "check": "tsc -b tsconfig.json"
   },
   "dependencies": {
-    "@bang/compiler": "workspace:*",
     "@bang/core": "workspace:*",
-    "@effect/cli": "^0.75.0",
-    "@effect/platform": "^0.96.0",
-    "@effect/platform-bun": "^0.89.0",
     "effect": "^3.21.0"
   },
   "devDependencies": {

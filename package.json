@@ -7,8 +7,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest",
-    "check": "vp exec tsc --noEmit -p packages/core/tsconfig.json && vp exec tsc --noEmit -p packages/cli/tsconfig.json && vp run lint",
-    "lint": "eslint packages/core/src/ packages/cli/src/ --fix"
+    "check": "vp exec tsc --noEmit -p packages/core/tsconfig.json && vp exec tsc --noEmit -p packages/compiler/tsconfig.json && vp exec tsc --noEmit -p packages/cli/tsconfig.json && vp run lint",
+    "lint": "eslint packages/core/src/ packages/compiler/src/ packages/cli/src/ --fix"
   },
   "devDependencies": {
     "@effect/eslint-plugin": "^0.3.2",

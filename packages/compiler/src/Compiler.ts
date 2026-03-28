@@ -1,9 +1,9 @@
 import { Effect } from "effect";
-import * as Lexer from "./Lexer.js";
-import * as Parser from "./Parser.js";
+import * as Lexer from "@bang/core/Lexer";
+import * as Parser from "@bang/core/Parser";
 import * as Checker from "./Checker.js";
 import * as Codegen from "./Codegen.js";
-import type { CompilerError } from "./CompilerError.js";
+import type { CompilerError } from "@bang/core/CompilerError";
 
 export const lex = Lexer.tokenize;
 export const parse = Parser.parse;

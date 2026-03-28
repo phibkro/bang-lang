@@ -38,6 +38,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@bang/compiler':
+        specifier: workspace:*
+        version: link:../compiler
       '@bang/core':
         specifier: workspace:*
         version: link:../core
@@ -50,6 +53,25 @@ importers:
       '@effect/platform-bun':
         specifier: ^0.89.0
         version: 0.89.0(@effect/cluster@0.58.0(@effect/platform@0.96.0(effect@3.21.0))(@effect/rpc@0.75.0(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(@effect/sql@0.51.0(@effect/experimental@0.60.0(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(@effect/workflow@0.18.0(@effect/experimental@0.60.0(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(@effect/platform@0.96.0(effect@3.21.0))(@effect/rpc@0.75.0(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(effect@3.21.0))(effect@3.21.0))(@effect/platform@0.96.0(effect@3.21.0))(@effect/rpc@0.75.0(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(@effect/sql@0.51.0(@effect/experimental@0.60.0(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(@effect/platform@0.96.0(effect@3.21.0))(effect@3.21.0))(effect@3.21.0)
+      effect:
+        specifier: ^3.21.0
+        version: 3.21.0
+    devDependencies:
+      '@effect/vitest':
+        specifier: ^0.29.0
+        version: 0.29.0(effect@3.21.0)(vitest@3.2.4(@types/node@25.5.0)(lightningcss@1.32.0)(yaml@2.8.3))
+      typescript:
+        specifier: ^5.8
+        version: 5.9.3
+      vitest:
+        specifier: ^3
+        version: 3.2.4(@types/node@25.5.0)(lightningcss@1.32.0)(yaml@2.8.3)
+
+  packages/compiler:
+    dependencies:
+      '@bang/core':
+        specifier: workspace:*
+        version: link:../core
       effect:
         specifier: ^3.21.0
         version: 3.21.0

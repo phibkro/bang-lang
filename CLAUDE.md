@@ -1,13 +1,13 @@
 # Bang Language Compiler
 
-Bang transpiles to Effect TS. Monorepo: `@bang/core` (library), `@bang/cli` (CLI). Repo: github.com/phibkro/bang-lang
+Bang transpiles to Effect TS. Monorepo: `@bang/core` (interpreter domain), `@bang/compiler` (compilation pipeline), `@bang/cli` (CLI). Repo: github.com/phibkro/bang-lang
 
 ## Commands
 
 - `vp check --fix` — format + Oxlint (auto-fix)
 - `vp run lint` — ESLint with Effect/functional rules (auto-fix)
 - `vp run check` — tsc + ESLint (full verification)
-- `npx vitest run` — run all tests (139 tests, use this for accurate counts)
+- `npx vitest run` — run all tests (200 tests, use this for accurate counts)
 - `bang compile examples/hello.bang` — compile .bang to .ts
 - `bang fmt <file.bang>` — format in place
 - `bang run <file.bang>` — compile and execute
@@ -72,18 +72,20 @@ Pragmatic (skip):
 
 ## Key Files
 
-- `packages/core/src/Compiler.ts` — pipeline entry: compose(lex, parse, check, codegen)
 - `packages/core/src/Ast.ts` — Schema.TaggedClass nodes with Schema.suspend for recursion
 - `packages/core/src/Token.ts` — Schema.TaggedClass token types
 - `packages/core/src/Interpreter.ts` — reference eval (ground truth semantics)
 - `packages/core/src/Formatter.ts` — canonical pretty-printer via @effect/printer (Wadler-Lindig)
 - `packages/core/src/Value.ts` — interpreter values (Data.TaggedEnum, not Schema.TaggedClass — internal only)
 - `packages/core/src/AstGen.ts` — random AST generators for property tests
+- `packages/compiler/src/Compiler.ts` — pipeline entry: compose(lex, parse, check, codegen)
+- `packages/compiler/src/Checker.ts` — type checking / scope validation
+- `packages/compiler/src/Codegen.ts` — Effect TS code generation
 - `packages/cli/src/index.ts` — CLI entry point (@effect/cli): compile, run, fmt
 
 ## Status
 
-v0.3 compiler complete. 199 tests, 200 random property test iterations.
+v0.3 compiler complete. 200 tests, 200 random property test iterations.
 v0.3 adds: match+patterns (wildcard, binding, constructor, literal), type declarations (ADTs), mut+assignment, import/export.
 Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)` — covers parser + formatter + interpreter.
 

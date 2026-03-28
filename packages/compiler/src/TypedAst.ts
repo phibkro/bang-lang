@@ -1,5 +1,5 @@
-import type * as Ast from "./Ast.js";
-import type { Span } from "./Span.js";
+import type * as Ast from "@bang/core/Ast";
+import type { Span } from "@bang/core/Span";
 
 export interface TypeAnnotation {
   readonly type: Ast.Type;

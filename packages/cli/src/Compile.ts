@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { FileSystem } from "@effect/platform";
-import { Compiler, ErrorFormatter } from "@bang/core";
+import { ErrorFormatter } from "@bang/core";
+import { Compiler } from "@bang/compiler";
 
 export const compileFile = (filePath: string) =>
   Effect.gen(function* () {

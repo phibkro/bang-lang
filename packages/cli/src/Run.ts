@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { FileSystem } from "@effect/platform";
-import { Compiler } from "@bang/core";
+import { Compiler } from "@bang/compiler";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execSync } from "node:child_process";

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Either } from "effect";
-import { Checker, Compiler, Formatter, Lexer, Parser } from "@bang/core";
+import { Formatter, Lexer, Parser } from "@bang/core";
+import { Checker, Compiler } from "@bang/compiler";
 import type * as Ast from "@bang/core/Ast";
 
 const parse = (source: string) =>
