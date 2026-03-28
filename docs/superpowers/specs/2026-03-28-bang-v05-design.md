@@ -20,10 +20,10 @@ Seven waves, ordered by dependency:
 
 Match, catch, and handle are the same primitive — inspect a tagged value, dispatch by tag, run the matched arm. They differ only in which channel they operate on:
 
-| Method | Channel | Dispatches on |
-|--------|---------|---------------|
-| `.match` | A (success) | Value tags |
-| `.catch` | E (error) | Error tags |
+| Method    | Channel        | Dispatches on          |
+| --------- | -------------- | ---------------------- |
+| `.match`  | A (success)    | Value tags             |
+| `.catch`  | E (error)      | Error tags             |
 | `.handle` | R (dependency) | Effect interface types |
 
 `match expr { arms }` is syntactic sugar for `expr.match { arms }`. The keyword form exists for readability. The dot-method form is the primitive.
@@ -44,6 +44,7 @@ Remove `Mutation` as a statement type. `!x <- 5` parses as `ForceStatement(Binar
 **Parser:** Remove `parseMutation`. Put `<-` back in Pratt parser as binary operator (precedence PREC_MUT=1, right-associative). Remove `mut` detection for `<-` in `parseStatement`/`parseBlockItem`.
 
 **Interpreter:** Move mutation logic from `evalStmt` Mutation handler to `evalExpr` BinaryExpr handler for `<-` operator:
+
 ```
 BinaryExpr("<-", target, value):
   - Do NOT evaluate left operand through evalExpr (it would unwrap MutCell)
@@ -123,11 +124,13 @@ gen
 ### No new AST nodes
 
 `.handle Console impl` parses as existing `DotAccess` + `App`:
+
 ```
 App(DotAccess(expr, "handle"), [Ident("Console"), Ident("impl")])
 ```
 
 `.map f` parses as:
+
 ```
 App(DotAccess(expr, "map"), [f])
 ```
@@ -147,6 +150,7 @@ The braced handler body `{ Tag -> expr, Tag2 -> expr2 }` reuses match arm parsin
 The interpreter needs a real effect system to handle `.handle` and `.catch`:
 
 **Handler stack:** A stack of handler maps, scoped to blocks. When `!expr.handle Console impl` is forced:
+
 1. Push `{ Console: impl }` onto the handler stack
 2. Evaluate `expr` in the context with this handler available
 3. When `!Console.log msg` is encountered during evaluation, look up `Console` in the handler stack, find `impl`, call `impl.log(msg)`
@@ -162,13 +166,13 @@ The interpreter needs a real effect system to handle `.handle` and `.catch`:
 
 Based on method name, generate Effect TS:
 
-| Bang | Effect TS |
-|------|-----------|
+| Bang                       | Effect TS                                                  |
+| -------------------------- | ---------------------------------------------------------- |
 | `expr.handle Console impl` | `pipe(expr, Effect.provide(Layer.succeed(Console, impl)))` |
-| `expr.catch NotFound f` | `pipe(expr, Effect.catchTag("NotFound", f))` |
-| `expr.map f` | `pipe(expr, Effect.map(f))` |
-| `expr.tap f` | `pipe(expr, Effect.tap(f))` |
-| `expr.match { arms }` | `pipe(expr, Match.value(...).pipe(Match.tag(...), ...))` |
+| `expr.catch NotFound f`    | `pipe(expr, Effect.catchTag("NotFound", f))`               |
+| `expr.map f`               | `pipe(expr, Effect.map(f))`                                |
+| `expr.tap f`               | `pipe(expr, Effect.tap(f))`                                |
+| `expr.match { arms }`      | `pipe(expr, Match.value(...).pipe(Match.tag(...), ...))`   |
 
 ### Braced multi-handler (deferred)
 
@@ -203,9 +207,12 @@ use conn = withDb        -- description: resource binding
 ```typescript
 // !use conn = withDb;
 // rest...
-yield* withDb((conn) => Effect.gen(function* () {
-    // rest...
-}))
+yield *
+  withDb((conn) =>
+    Effect.gen(function* () {
+      // rest...
+    }),
+  );
 ```
 
 The compiler restructures: everything after `!use x = f;` in the block becomes the callback body.
@@ -242,6 +249,7 @@ sub = !handler                           -- subscription active
 ### Cycle detection (checker)
 
 Post-pass after scope validation:
+
 1. Walk all `on source handler` expressions
 2. For each handler body, find all `<-` targets (mutation expressions)
 3. Resolve source and targets to `mut` bindings
@@ -253,7 +261,7 @@ Post-pass after scope validation:
 
 ```typescript
 // !on count handler
-yield* subscribeToRef(count, handler)
+yield * subscribeToRef(count, handler);
 ```
 
 ## Wave 5: Nested Patterns + Guards
@@ -273,14 +281,15 @@ yield* subscribeToRef(count, handler)
 **Interpreter:** `matchPattern` already recurses on `ConstructorPattern.patterns`. Nesting should work with the parser fix.
 
 **Codegen:** Nested destructuring in `Match.tag`:
+
 ```typescript
 Match.tag("Ok", ({ _0 }) =>
   Match.value(_0).pipe(
     Match.tag("Some", ({ _0: value }) => value),
     Match.tag("None", () => defaultValue),
-    Match.exhaustive
-  )
-)
+    Match.exhaustive,
+  ),
+);
 ```
 
 ### Guards
@@ -300,11 +309,12 @@ Match.tag("Ok", ({ _0 }) =>
 **Interpreter:** Match pattern first. If pattern matches, evaluate guard expression in the extended environment (with pattern bindings). If guard is false, try next arm.
 
 **Codegen:** `Match.when` with compound predicate:
+
 ```typescript
 Match.when(
   (n) => n > 0,
-  (n) => "positive"
-)
+  (n) => "positive",
+);
 ```
 
 ## Wave 6: Newtype + Record Types
@@ -330,6 +340,7 @@ type UserId = String
 ```
 
 **Parser:** After `type Name =`, if next token is a Type (not a TypeIdent starting a constructor, not `{` starting a record, not `|`), it's a newtype. Disambiguation:
+
 - TypeIdent followed by `|` or another TypeIdent → ADT constructor
 - TypeIdent alone at end of declaration → could be newtype OR single nullary constructor. Resolve: single TypeIdent after `=` is newtype wrapping that type.
 - `{` with `Ident :` inside → record type
@@ -337,9 +348,10 @@ type UserId = String
 **Interpreter:** `UserId "abc"` wraps. Register `UserId` as a constructor function (arity 1) that produces `Tagged({ tag: "UserId", fields: [value] })`. `UserId.unwrap x` unwraps — `DotAccess` with field "unwrap" on a Tagged value returns the inner value.
 
 **Codegen:**
+
 ```typescript
 class UserId extends Schema.Class<UserId>("UserId")({
-  value: Schema.String
+  value: Schema.String,
 }) {}
 ```
 
@@ -357,10 +369,11 @@ type User = {
 **Interpreter:** `User { name: "alice", age: 30 }` constructs. Register `User` as a constructor that takes a record argument and produces `Tagged({ tag: "User", fields: { name: "alice", age: 30 } })`. Field access via DotAccess: `user.name` extracts the field.
 
 **Codegen:**
+
 ```typescript
 class User extends Schema.Class<User>("User")({
   name: Schema.String,
-  age: Schema.Int
+  age: Schema.Int,
 }) {}
 ```
 
@@ -390,6 +403,7 @@ Expr = ... | 'comptime' Expr | ...
 ### Compiler
 
 When the codegen encounters `comptime expr`:
+
 1. Call `Interpreter.evalExpr(expr, env)` at compile time
 2. Convert the resulting `Value` to an AST literal (Num → IntLiteral, Str → StringLiteral, etc.)
 3. Substitute the literal in the generated output
@@ -403,6 +417,7 @@ For complex values (Tagged, records), serialize to the appropriate `Data.tagged(
 ## Implementation Order
 
 Each wave follows the pipeline:
+
 ```
 AST changes → Lexer → Parser → Interpreter (ground truth)
   → Tests → Checker → Codegen → Formatter
@@ -412,6 +427,7 @@ AST changes → Lexer → Parser → Interpreter (ground truth)
 **The interpreter is the spec.** Implement semantics there first. If it works in the interpreter, translate to codegen. If the compiler disagrees with the interpreter, the compiler is wrong.
 
 Wave dependencies:
+
 - Wave 1 (alignment) must go first
 - Waves 2-4 depend on wave 1
 - Wave 2 (.handle) uses effect interfaces which are record types — Wave 2 initially works with simplified record-as-constructor patterns (positional fields). Full named-field record types (Wave 6) enhance this later.
