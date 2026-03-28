@@ -248,16 +248,7 @@ const ConstructorSchema: Schema.Schema<Constructor> = Schema.suspend(() =>
 // ---------------------------------------------------------------------------
 
 const StmtSchema = Schema.suspend(() =>
-  Schema.Union(
-    Declaration,
-    Declare,
-    ForceStatement,
-    ExprStatement,
-    TypeDecl,
-    Mutation,
-    Import,
-    Export,
-  ),
+  Schema.Union(Declaration, Declare, ForceStatement, ExprStatement, TypeDecl, Import, Export),
 );
 
 export class Program extends Schema.TaggedClass<Program>()("Program", {
@@ -298,12 +289,6 @@ export class TypeDecl extends Schema.TaggedClass<TypeDecl>()("TypeDecl", {
   span: Span,
 }) {}
 
-export class Mutation extends Schema.TaggedClass<Mutation>()("Mutation", {
-  target: Schema.String,
-  value: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
-  span: Span,
-}) {}
-
 export class Import extends Schema.TaggedClass<Import>()("Import", {
   modulePath: Schema.Array(Schema.String),
   names: Schema.Array(Schema.String),
@@ -321,7 +306,6 @@ export type Stmt =
   | ForceStatement
   | ExprStatement
   | TypeDecl
-  | Mutation
   | Import
   | Export;
 

@@ -162,7 +162,10 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       const stmtHasEffect = e.statements.some(
         (s) =>
           s._tag === "ForceStatement" ||
-          s._tag === "Mutation" ||
+          (s._tag === "ForceStatement" &&
+            s.expr._tag === "Force" &&
+            s.expr.expr._tag === "BinaryExpr" &&
+            s.expr.expr.op === "<-") ||
           (s._tag === "Declaration" && s.mutable) ||
           (s._tag === "Declaration" && classifyExpr(s.value, blockScope) === "effect"),
       );
@@ -245,9 +248,40 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     Match.tag("FloatLiteral", () => Effect.void),
     Match.tag("BoolLiteral", () => Effect.void),
     Match.tag("UnitLiteral", () => Effect.void),
-    Match.tag("BinaryExpr", (e) =>
-      Effect.flatMap(validateExprScope(e.left, scope), () => validateExprScope(e.right, scope)),
-    ),
+    Match.tag("BinaryExpr", (e) => {
+      if (e.op === "<-") {
+        // Mutation: verify left is Ident and is mutable in scope
+        if (e.left._tag !== "Ident") {
+          return Effect.fail(
+            new CheckError({
+              message: "Left side of <- must be an identifier",
+              span: e.span,
+            }),
+          );
+        }
+        const entry = lookupScope(scope, e.left.name);
+        if (Option.isNone(entry)) {
+          return Effect.fail(
+            new CheckError({
+              message: `Undeclared identifier: ${e.left.name}`,
+              span: e.span,
+            }),
+          );
+        }
+        if (!entry.value.mutable) {
+          return Effect.fail(
+            new CheckError({
+              message: `Cannot mutate non-mutable binding: ${e.left.name}`,
+              span: e.span,
+            }),
+          );
+        }
+        return validateExprScope(e.right, scope);
+      }
+      return Effect.flatMap(validateExprScope(e.left, scope), () =>
+        validateExprScope(e.right, scope),
+      );
+    }),
     Match.tag("UnaryExpr", (e) => validateExprScope(e.expr, scope)),
     Match.tag("Block", (e) =>
       Effect.gen(function* () {
@@ -355,29 +389,6 @@ const checkStmt = (
     ),
     Match.tag("TypeDecl", (s) =>
       Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
-    ),
-    Match.tag("Mutation", (s) =>
-      Effect.gen(function* () {
-        yield* validateExprScope(s.value, scope);
-        const entry = lookupScope(scope, s.target);
-        if (Option.isNone(entry)) {
-          return yield* Effect.fail(
-            new CheckError({
-              message: `Undeclared identifier: ${s.target}`,
-              span: s.span,
-            }),
-          );
-        }
-        if (!entry.value.mutable) {
-          return yield* Effect.fail(
-            new CheckError({
-              message: `Cannot mutate non-mutable binding: ${s.target}`,
-              span: s.span,
-            }),
-          );
-        }
-        return annotate(s, { type: unknownType, effectClass: "signal" as const });
-      }),
     ),
     Match.tag("Import", (s) =>
       Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),

@@ -40,25 +40,35 @@ describe("Mutation", () => {
     }),
   );
 
-  it.effect("parses mutation statement in block", () =>
+  it.effect("parses mutation as BinaryExpr <- in block via ForceStatement", () =>
     Effect.gen(function* () {
-      const ast = yield* parse("y = { mut x = 0; x <- 1; x }");
+      const ast = yield* parse("y = { mut x = 0; !x <- 1; x }");
       const decl = ast.statements[0] as Ast.Declaration;
       expect(decl.value._tag).toBe("Block");
       if (decl.value._tag === "Block") {
         expect(decl.value.statements.length).toBe(2);
         expect(decl.value.statements[0]._tag).toBe("Declaration");
-        const mutation = decl.value.statements[1] as Ast.Mutation;
-        expect(mutation._tag).toBe("Mutation");
-        expect(mutation.target).toBe("x");
-        expect(mutation.value._tag).toBe("IntLiteral");
+        const forceStmt = decl.value.statements[1] as Ast.ForceStatement;
+        expect(forceStmt._tag).toBe("ForceStatement");
+        // ForceStatement wraps Force(BinaryExpr("<-", Ident("x"), IntLiteral(1)))
+        expect(forceStmt.expr._tag).toBe("Force");
+        if (forceStmt.expr._tag === "Force") {
+          const binExpr = forceStmt.expr.expr as Ast.BinaryExpr;
+          expect(binExpr._tag).toBe("BinaryExpr");
+          expect(binExpr.op).toBe("<-");
+          expect(binExpr.left._tag).toBe("Ident");
+          if (binExpr.left._tag === "Ident") {
+            expect(binExpr.left.name).toBe("x");
+          }
+          expect(binExpr.right._tag).toBe("IntLiteral");
+        }
       }
     }),
   );
 
   it.effect("parses mut declaration in block", () =>
     Effect.gen(function* () {
-      const ast = yield* parse("y = { mut x = 0; x <- 5; x }");
+      const ast = yield* parse("y = { mut x = 0; !x <- 5; x }");
       expect(ast.statements.length).toBe(1);
       const decl = ast.statements[0] as Ast.Declaration;
       expect(decl.value._tag).toBe("Block");
@@ -66,7 +76,7 @@ describe("Mutation", () => {
         expect(decl.value.statements.length).toBe(2);
         expect(decl.value.statements[0]._tag).toBe("Declaration");
         expect((decl.value.statements[0] as Ast.Declaration).mutable).toBe(true);
-        expect(decl.value.statements[1]._tag).toBe("Mutation");
+        expect(decl.value.statements[1]._tag).toBe("ForceStatement");
       }
     }),
   );
@@ -84,21 +94,21 @@ describe("Mutation", () => {
 
   it.effect("interprets mutation", () =>
     Effect.gen(function* () {
-      const result = yield* evalSource("y = { mut x = 0; x <- 5; x }");
+      const result = yield* evalSource("y = { mut x = 0; !x <- 5; x }");
       expect(Value.toJS(result)).toBe(5);
     }),
   );
 
   it.effect("interprets mutation in block", () =>
     Effect.gen(function* () {
-      const result = yield* evalSource("y = { mut x = 0; x <- 5; x }");
+      const result = yield* evalSource("y = { mut x = 0; !x <- 5; x }");
       expect(Value.toJS(result)).toBe(5);
     }),
   );
 
   it.effect("fails on mutation of non-mut binding", () =>
     Effect.gen(function* () {
-      const result = yield* Effect.either(evalSource("y = { x = 0; x <- 5; x }"));
+      const result = yield* Effect.either(evalSource("y = { x = 0; !x <- 5; x }"));
       expect(Either.isLeft(result)).toBe(true);
       if (Either.isLeft(result)) {
         expect(result.left.message).toContain("non-mutable");
@@ -108,7 +118,7 @@ describe("Mutation", () => {
 
   it.effect("fails on mutation of undeclared variable", () =>
     Effect.gen(function* () {
-      const result = yield* Effect.either(evalSource("y = { x <- 5; x }"));
+      const result = yield* Effect.either(evalSource("y = { !x <- 5; x }"));
       expect(Either.isLeft(result)).toBe(true);
     }),
   );
@@ -121,7 +131,7 @@ describe("Mutation", () => {
     Effect.gen(function* () {
       const result = yield* Effect.either(
         Effect.gen(function* () {
-          const tokens = yield* Lexer.tokenize("y = { z <- 5; z }");
+          const tokens = yield* Lexer.tokenize("y = { !z <- 5; z }");
           const ast = yield* Parser.parse(tokens);
           return yield* Checker.check(ast);
         }),
@@ -134,7 +144,7 @@ describe("Mutation", () => {
     Effect.gen(function* () {
       const result = yield* Effect.either(
         Effect.gen(function* () {
-          const tokens = yield* Lexer.tokenize("y = { x = 0; x <- 5; x }");
+          const tokens = yield* Lexer.tokenize("y = { x = 0; !x <- 5; x }");
           const ast = yield* Parser.parse(tokens);
           return yield* Checker.check(ast);
         }),
@@ -147,7 +157,7 @@ describe("Mutation", () => {
     Effect.gen(function* () {
       const result = yield* Effect.either(
         Effect.gen(function* () {
-          const tokens = yield* Lexer.tokenize("y = { mut x = 0; x <- 5; x }");
+          const tokens = yield* Lexer.tokenize("y = { mut x = 0; !x <- 5; x }");
           const ast = yield* Parser.parse(tokens);
           return yield* Checker.check(ast);
         }),
@@ -169,7 +179,7 @@ describe("Mutation", () => {
 
   it.effect("compiles mutation to Ref.set", () =>
     Effect.gen(function* () {
-      const code = yield* compileSource("y = { mut x = 0; x <- 5; x }");
+      const code = yield* compileSource("y = { mut x = 0; !x <- 5; x }");
       expect(code).toContain("Ref.set");
     }),
   );
@@ -183,7 +193,7 @@ describe("Mutation", () => {
 
   it.effect("codegen hoists Ref.get for mut reads in expressions", () =>
     Effect.gen(function* () {
-      const code = yield* compileSource("y = { mut x = 0; x <- x + 1; x }");
+      const code = yield* compileSource("y = { mut x = 0; !x <- x + 1; x }");
       // Should NOT contain "yield* Ref.get(x) + 1" inline (invalid JS in generators)
       // Should contain a hoisted read like "const _x = yield* Ref.get(x)"
       expect(code).not.toContain("Ref.get(x) +");
@@ -203,9 +213,9 @@ describe("Mutation", () => {
     }),
   );
 
-  it.effect("formats mutation statement in block", () =>
+  it.effect("formats mutation as BinaryExpr <- in block", () =>
     Effect.gen(function* () {
-      const formatted = yield* Formatter.formatSource("y = { mut x = 0; x <- 1; x }");
+      const formatted = yield* Formatter.formatSource("y = { mut x = 0; !x <- 1; x }");
       expect(formatted).toContain("x <- 1");
     }),
   );

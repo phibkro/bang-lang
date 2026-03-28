@@ -302,7 +302,6 @@ const parseStatement = (s: ParseState): P<Ast.Stmt> =>
         onNone: () => parseExprStatement(s),
         onSome: (next) => {
           if (tokenTag(next) === "Operator" && tokenValue(next) === "=") return parseDeclaration(s);
-          if (tokenTag(next) === "Operator" && tokenValue(next) === "<-") return parseMutation(s);
           return parseExprStatement(s);
         },
       });
@@ -387,25 +386,6 @@ const parseMutDeclaration = (s: ParseState): P<Ast.Declaration> =>
         span: Span.merge(tokenSpan(mutTok), value.span),
       }),
       s4,
-    ] as const;
-  });
-
-// ---------------------------------------------------------------------------
-// Mutation statement
-// ---------------------------------------------------------------------------
-
-const parseMutation = (s: ParseState): P<Ast.Mutation> =>
-  Effect.gen(function* () {
-    const [nameTok, s1] = yield* expect(s, "Ident");
-    const [, s2] = yield* expect(s1, "Operator", "<-");
-    const [value, s3] = yield* parseExpr(s2);
-    return [
-      new Ast.Mutation({
-        target: tokenValue(nameTok),
-        value,
-        span: Span.merge(tokenSpan(nameTok), value.span),
-      }),
-      s3,
     ] as const;
   });
 
@@ -520,6 +500,7 @@ const parseExprStatement = (s: ParseState): P<Ast.ExprStatement> =>
 // Expressions — Pratt parser (precedence climbing)
 // ---------------------------------------------------------------------------
 
+const PREC_MUT = 1;
 const PREC_XOR = 4;
 const PREC_OR = 5;
 const PREC_AND = 6;
@@ -530,6 +511,7 @@ const PREC_UNARY = 10;
 const PREC_APP = 11;
 
 const BINARY_PREC: Record<string, number> = {
+  "<-": PREC_MUT,
   xor: PREC_XOR,
   or: PREC_OR,
   and: PREC_AND,
@@ -547,7 +529,7 @@ const BINARY_PREC: Record<string, number> = {
   "%": PREC_MUL,
 };
 
-const RIGHT_ASSOC = new Set<string>();
+const RIGHT_ASSOC = new Set<string>(["<-"]);
 
 const getBinaryPrec = (t: Token): number | undefined => {
   const tag = tokenTag(t);
@@ -1057,7 +1039,6 @@ const parseBlockItem = (s: ParseState): P<Ast.Stmt> =>
         onNone: () => parseExprStatement(s),
         onSome: (next) => {
           if (tokenTag(next) === "Operator" && tokenValue(next) === "=") return parseDeclaration(s);
-          if (tokenTag(next) === "Operator" && tokenValue(next) === "<-") return parseMutation(s);
           return parseExprStatement(s);
         },
       });

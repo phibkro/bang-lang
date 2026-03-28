@@ -38,6 +38,7 @@ const KEYWORDS = new Set([
   "gen",
   "on",
   "use",
+  "comptime",
 ]);
 
 const DELIMITER_CHARS = new Set(["{", "}", "(", ")", "[", "]", ":", ";", ",", "|"]);

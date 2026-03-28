@@ -68,6 +68,26 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
     ),
     Match.tag("BinaryExpr", (e) =>
       Effect.gen(function* () {
+        if (e.op === "<-") {
+          // Do NOT evaluate left side through evalExpr (would unwrap MutCell)
+          if (e.left._tag !== "Ident") {
+            return yield* Effect.fail(
+              new EvalError({ message: "Left side of <- must be an identifier", span: e.span }),
+            );
+          }
+          const cell = HashMap.get(env, e.left.name);
+          if (Option.isNone(cell) || cell.value._tag !== "MutCell") {
+            return yield* Effect.fail(
+              new EvalError({
+                message: `Cannot mutate non-mutable binding: ${e.left.name}`,
+                span: e.span,
+              }),
+            );
+          }
+          const newValue = yield* evalExpr(e.right, env);
+          cell.value.ref.value = newValue;
+          return newValue;
+        }
         const left = yield* evalExpr(e.left, env);
         const right = yield* evalExpr(e.right, env);
         return yield* applyBinaryOp(e.op, left, right, e.span);
@@ -209,27 +229,6 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
           ),
         ),
       ),
-    ),
-    Match.tag("Mutation", (s) =>
-      Effect.gen(function* () {
-        const cell = HashMap.get(env, s.target);
-        if (Option.isNone(cell)) {
-          return yield* Effect.fail(
-            new EvalError({ message: `Undefined variable: ${s.target}`, span: s.span }),
-          );
-        }
-        if (cell.value._tag !== "MutCell") {
-          return yield* Effect.fail(
-            new EvalError({
-              message: `Cannot mutate non-mutable binding: ${s.target}`,
-              span: s.span,
-            }),
-          );
-        }
-        const newValue = yield* evalExpr(s.value, env);
-        cell.value.ref.value = newValue;
-        return env;
-      }),
     ),
     Match.tag("Import", () => Effect.succeed(env)),
     Match.tag("Export", () => Effect.succeed(env)),
@@ -404,12 +403,7 @@ export const evalProgram = (program: Ast.Program): Effect.Effect<Value, EvalErro
         lastValue = yield* evalExpr(stmt.expr, env);
       } else if (stmt._tag === "ExprStatement") {
         lastValue = yield* evalExpr(stmt.expr, env);
-      } else if (
-        stmt._tag === "TypeDecl" ||
-        stmt._tag === "Mutation" ||
-        stmt._tag === "Import" ||
-        stmt._tag === "Export"
-      ) {
+      } else if (stmt._tag === "TypeDecl" || stmt._tag === "Import" || stmt._tag === "Export") {
         env = yield* evalStmt(stmt, env);
         lastValue = Unit();
       }

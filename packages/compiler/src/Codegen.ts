@@ -229,11 +229,6 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap, mutNames: ReadonlySet<str
     Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls, mutNames)),
     Match.tag("Declare", () => ""),
     Match.tag("TypeDecl", () => ""),
-    Match.tag("Mutation", (s) => {
-      const { prefixLines, hoisted } = hoistMutReads(s.value, mutNames);
-      const valueCode = emitExpr(s.value, decls, mutNames, hoisted);
-      return [...prefixLines, `yield* Ref.set(${s.target}, ${valueCode})`].join("\n  ");
-    }),
     Match.tag("Import", (s) => {
       const path = s.modulePath.map((p) => p.toLowerCase()).join("/");
       return `import { ${s.names.join(", ")} } from "./${path}"`;
@@ -293,6 +288,14 @@ const emitExpr = (
     Match.tag("Force", (e) => `yield* ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`),
     Match.tag("FloatLiteral", (e) => String(e.value)),
     Match.tag("BinaryExpr", (e) => {
+      if (e.op === "<-") {
+        // Left must be raw name, NOT emitExpr (which would emit Ref.get)
+        const target =
+          e.left._tag === "Ident" ? e.left.name : emitExpr(e.left, decls, mutNames, hoistedNames);
+        const { prefixLines, hoisted } = hoistMutReads(e.right, mutNames);
+        const valueCode = emitExpr(e.right, decls, mutNames, hoisted);
+        return [...prefixLines, `yield* Ref.set(${target}, ${valueCode})`].join("\n  ");
+      }
       const op = mapBinaryOp(e.op);
       const prec = jsPrecOf(op);
       const leftCode = emitExpr(e.left, decls, mutNames, hoistedNames);
@@ -456,13 +459,6 @@ const emitStatement = (
       );
       return lines.reduce((acc, line) => writeLine(acc, line), w1);
     }),
-    Match.tag("Mutation", (node) => {
-      const w1 = recordMapping(w, node.span);
-      const { prefixLines, hoisted } = hoistMutReads(node.value, mutNames);
-      const w2 = prefixLines.reduce((acc, line) => writeLine(acc, line), w1);
-      const valueCode = emitExpr(node.value, decls, mutNames, hoisted);
-      return writeLine(w2, `yield* Ref.set(${node.target}, ${valueCode})`);
-    }),
     Match.tag("Import", (node) => {
       const w1 = recordMapping(w, node.span);
       const path = node.modulePath.map((p) => p.toLowerCase()).join("/");
@@ -507,9 +503,14 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const hasForce = Arr.some(program.statements, (s) => s.node._tag === "ForceStatement");
   const hasTypeDecl = Arr.some(program.statements, (s) => s.node._tag === "TypeDecl");
   const hasMatch = Arr.some(program.statements, (s) => stmtContainsMatch(s.node));
+  const stmtHasMutExpr = (stmt: TypedAst.TypedStmt): boolean =>
+    stmt.node._tag === "ForceStatement" &&
+    stmt.node.expr._tag === "Force" &&
+    stmt.node.expr.expr._tag === "BinaryExpr" &&
+    stmt.node.expr.expr.op === "<-";
   const hasMut = Arr.some(
     program.statements,
-    (s) => (s.node._tag === "Declaration" && s.node.mutable) || s.node._tag === "Mutation",
+    (s) => (s.node._tag === "Declaration" && s.node.mutable) || stmtHasMutExpr(s),
   );
   const needsEffectImport = HashMap.size(decls) > 0 || hasForce || hasMut;
   const needsDataImport = hasTypeDecl;

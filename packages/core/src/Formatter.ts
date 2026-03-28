@@ -233,9 +233,6 @@ const formatTopLevelStmt = (stmt: Ast.Stmt): Doc.Doc<never> =>
       const ctorDoc = ctors.reduce((a, b) => Doc.hcat([a, Doc.text(" | "), b]));
       return Doc.hcat([Doc.text(`type ${s.name}${params} = `), ctorDoc]);
     }),
-    Match.tag("Mutation", (s) =>
-      Doc.hcat([Doc.text(s.target), Doc.text(" <- "), formatExpr(s.value)]),
-    ),
     Match.tag("Import", (s) =>
       Doc.text(`from ${s.modulePath.join(".")} import { ${s.names.join(", ")} }`),
     ),
