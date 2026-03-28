@@ -905,7 +905,7 @@ const isPatternTerminator = (t: Token): boolean => {
   if (tag === "Operator" && tokenValue(t) === "->") return true;
   if (tag === "Delimiter") {
     const v = tokenValue(t);
-    return v === "," || v === "}";
+    return v === "," || v === "}" || v === ")";
   }
   if (tag === "EOF") return true;
   return false;
@@ -915,6 +915,14 @@ const parsePattern = (s: ParseState): P<Ast.Pattern> =>
   Effect.gen(function* () {
     const t = yield* peek(s);
     const tag = tokenTag(t);
+
+    // Grouped pattern: (Pattern)
+    if (tag === "Delimiter" && tokenValue(t) === "(") {
+      const [, s1] = yield* advance(s);
+      const [inner, s2] = yield* parsePattern(s1);
+      const [, s3] = yield* expect(s2, "Delimiter", ")");
+      return [inner, s3] as const;
+    }
 
     // Wildcard: _
     if (tag === "Ident" && tokenValue(t) === "_") {
