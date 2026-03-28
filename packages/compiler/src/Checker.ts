@@ -191,10 +191,6 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       const stmtHasEffect = e.statements.some(
         (s) =>
           s._tag === "ForceStatement" ||
-          (s._tag === "ForceStatement" &&
-            s.expr._tag === "Force" &&
-            s.expr.expr._tag === "BinaryExpr" &&
-            s.expr.expr.op === "<-") ||
           (s._tag === "Declaration" && s.mutable) ||
           (s._tag === "Declaration" && classifyExpr(s.value, blockScope) === "effect"),
       );

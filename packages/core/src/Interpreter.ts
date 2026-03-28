@@ -181,7 +181,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
                 ? yield* evalExpr(e.args[1], env)
                 : Closure({ params: ["_"], body: e.args[0], env });
             return yield* Effect.catchAll(evalExpr(e.func.object, env), (err) => {
-              if (err instanceof EvalError && err.message.includes(errorTag)) {
+              if (err instanceof EvalError && (err.tag === errorTag || (err.tag === "" && err.message.startsWith(errorTag + ":")))) {
                 return applyValue(handler, [Str({ value: err.message })], e.span);
               }
               return Effect.fail(err);

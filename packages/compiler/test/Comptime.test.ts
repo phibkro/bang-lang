@@ -51,10 +51,17 @@ describe("comptime", () => {
     }),
   );
 
-  it.effect("compiles comptime expression", () =>
+  it.effect("comptime evaluates at compile time", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile("x = comptime { 1 + 2 + 3 }");
+      expect(result.code).toContain("6");
+      expect(result.code).not.toContain("1 + 2");
+    }),
+  );
+
+  it.effect("comptime with simple literal compiles to value", () =>
     Effect.gen(function* () {
       const result = yield* Compiler.compile("x = comptime { 42 }");
-      expect(result.code).toContain("comptime");
       expect(result.code).toContain("42");
     }),
   );

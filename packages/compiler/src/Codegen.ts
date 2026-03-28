@@ -2,6 +2,7 @@ import { Array as Arr, Effect, HashMap, Match, Option } from "effect";
 import type * as Ast from "@bang/core/Ast";
 import type { CompilerError } from "@bang/core/CompilerError";
 import { CodegenError } from "@bang/core/CompilerError";
+import { Interpreter, Value as ValueMod } from "@bang/core";
 import * as SourceMap from "./SourceMap.js";
 import * as Span from "@bang/core/Span";
 import type * as TypedAst from "./TypedAst.js";
@@ -389,10 +390,23 @@ const emitExpr = (
         .join("");
       return `\`${inner}\``;
     }),
-    Match.tag(
-      "ComptimeExpr",
-      (e) => `/* comptime */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
-    ),
+    Match.tag("ComptimeExpr", (e) => {
+      try {
+        const result = Effect.runSync(Interpreter.evalExpr(e.expr, HashMap.empty()));
+        return ValueMod.$match(result, {
+          Num: (n) => String(n.value),
+          Str: (s) => `"${s.value}"`,
+          Bool: (b) => String(b.value),
+          Unit: () => "undefined",
+          Closure: () => `/* comptime: cannot serialize closure */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+          Tagged: () => `/* comptime: cannot serialize tagged */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+          Constructor: () => `/* comptime: cannot serialize constructor */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+          MutCell: () => `/* comptime: cannot serialize mutcell */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+        });
+      } catch {
+        return `/* comptime eval failed */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`;
+      }
+    }),
     Match.tag(
       "UseExpr",
       (e) => `/* use ${e.name} = */ ${emitExpr(e.value, decls, mutNames, hoistedNames)}`,

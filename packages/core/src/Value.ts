@@ -32,6 +32,7 @@ export const { Num, Str, Bool, Unit, Closure, Tagged, Constructor, MutCell, $mat
 
 export class EvalError extends Schema.TaggedError<EvalError>()("EvalError", {
   message: Schema.String,
+  tag: Schema.optionalWith(Schema.String, { default: () => "" }),
   span: Schema.Any,
 }) {}
 

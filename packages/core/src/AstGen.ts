@@ -53,12 +53,29 @@ const genPattern = (depth: number): fc.Arbitrary<Ast.Pattern> =>
 // Recursive generators
 // ---------------------------------------------------------------------------
 
+/** Generate operands for binary expressions — excludes Lambda/OnExpr which don't
+ *  roundtrip correctly when used as direct binary operands (formatter limitation). */
+const genBinaryOperand = (depth: number): fc.Arbitrary<Ast.Expr> =>
+  depth <= 0
+    ? fc.oneof(genIntLiteral, genStringLiteral, genBoolLiteral, genUnitLiteral)
+    : fc.oneof(
+        genIntLiteral,
+        genStringLiteral,
+        genBoolLiteral,
+        genIdent,
+        genBinaryExpr(depth),
+        genUnaryExpr(depth),
+        genBlock(depth),
+        genMatchExpr(depth),
+        genComptimeExpr(depth),
+      );
+
 const genBinaryExpr = (depth: number) =>
   fc
     .tuple(
-      genExpr(depth - 1),
+      genBinaryOperand(depth - 1),
       fc.constantFrom("+", "-", "*", "==", "!=", "<", ">", "and", "or"),
-      genExpr(depth - 1),
+      genBinaryOperand(depth - 1),
     )
     .map(([left, op, right]) => new Ast.BinaryExpr({ op, left, right, span: s }));
 
@@ -111,17 +128,24 @@ const genLambda = (depth: number) =>
         }),
     );
 
+const genArm = (depth: number) =>
+  fc
+    .tuple(genPattern(0), fc.boolean(), genExpr(depth - 1), genExpr(depth - 1))
+    .map(([pat, hasGuard, guardExpr, body]) =>
+      new Ast.Arm({
+        pattern: pat,
+        guard: hasGuard ? Option.some(guardExpr) : Option.none(),
+        body,
+        span: s,
+      }),
+    );
+
 const genMatchExpr = (depth: number) =>
   fc
     .tuple(
       // Use atom-like scrutinees to ensure correct parsing at high precedence
       fc.oneof(genIntLiteral, genBoolLiteral, genIdent),
-      fc.array(
-        fc
-          .tuple(genPattern(0), genExpr(depth - 1))
-          .map(([pat, body]) => new Ast.Arm({ pattern: pat, guard: Option.none(), body, span: s })),
-        { minLength: 1, maxLength: 3 },
-      ),
+      fc.array(genArm(depth - 1), { minLength: 1, maxLength: 3 }),
     )
     .map(([scrutinee, arms]) => new Ast.MatchExpr({ scrutinee, arms, span: s }));
 
@@ -132,7 +156,10 @@ const genMatchExpr = (depth: number) =>
 const genComptimeExpr = (depth: number) =>
   genExpr(depth - 1).map((expr) => new Ast.ComptimeExpr({ expr, span: s }));
 
-
+const genOnExpr = (depth: number) =>
+  fc
+    .tuple(genIdent, genLambda(depth - 1))
+    .map(([source, handler]) => new Ast.OnExpr({ source, handler, span: s }));
 
 export const genExpr = (depth: number): fc.Arbitrary<Ast.Expr> =>
   depth <= 0
@@ -148,6 +175,7 @@ export const genExpr = (depth: number): fc.Arbitrary<Ast.Expr> =>
         genLambda(depth),
         genMatchExpr(depth),
         genComptimeExpr(depth),
+        genOnExpr(depth),
       );
 
 // ---------------------------------------------------------------------------
