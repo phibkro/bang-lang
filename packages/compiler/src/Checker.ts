@@ -103,6 +103,14 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
           });
         }),
       ),
+      Match.tag("NewtypeDecl", (s) =>
+        HashMap.set(acc, s.name, {
+          name: s.name,
+          type: Option.none(),
+          effectClass: "signal" as const,
+          mutable: false,
+        }),
+      ),
       Match.tag("Import", (s) =>
         Arr.reduce(s.names, acc, (scope, name) =>
           HashMap.set(scope, name, {
@@ -391,6 +399,9 @@ const checkStmt = (
       }),
     ),
     Match.tag("TypeDecl", (s) =>
+      Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
+    ),
+    Match.tag("NewtypeDecl", (s) =>
       Effect.succeed(annotate(s, { type: unknownType, effectClass: "signal" as const })),
     ),
     Match.tag("Import", (s) =>

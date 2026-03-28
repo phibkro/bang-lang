@@ -248,8 +248,23 @@ const ConstructorSchema: Schema.Schema<Constructor> = Schema.suspend(() =>
 // Statement nodes
 // ---------------------------------------------------------------------------
 
+export class NewtypeDecl extends Schema.TaggedClass<NewtypeDecl>()("NewtypeDecl", {
+  name: Schema.String,
+  wrappedType: Schema.suspend((): Schema.Schema<Type> => TypeSchema),
+  span: Span,
+}) {}
+
 const StmtSchema = Schema.suspend(() =>
-  Schema.Union(Declaration, Declare, ForceStatement, ExprStatement, TypeDecl, Import, Export),
+  Schema.Union(
+    Declaration,
+    Declare,
+    ForceStatement,
+    ExprStatement,
+    TypeDecl,
+    NewtypeDecl,
+    Import,
+    Export,
+  ),
 );
 
 export class Program extends Schema.TaggedClass<Program>()("Program", {
@@ -307,6 +322,7 @@ export type Stmt =
   | ForceStatement
   | ExprStatement
   | TypeDecl
+  | NewtypeDecl
   | Import
   | Export;
 

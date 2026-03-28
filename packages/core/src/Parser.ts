@@ -133,7 +133,7 @@ const parseProgram = (s: ParseState): P<Ast.Program> =>
 // Type declarations
 // ---------------------------------------------------------------------------
 
-const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl> =>
+const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl | Ast.NewtypeDecl> =>
   Effect.gen(function* () {
     const [startTok, s1] = yield* expect(s, "Keyword", "type");
     const [nameTok, s2] = yield* expect(s1, "TypeIdent");
@@ -154,6 +154,49 @@ const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl> =>
     const [typeParams, s3] = yield* collectParams([], s2);
     const typeParamSet = new Set(typeParams);
     const [, s4] = yield* expect(s3, "Operator", "=");
+
+    // Newtype detection: after `=`, if we see a single type (TypeIdent or type-param Ident)
+    // NOT followed by `|`, `{`, or another TypeIdent/Ident — it's a newtype wrapper
+    const isNewtype = yield* Effect.gen(function* () {
+      const atEnd = yield* isAtEnd(s4);
+      if (atEnd) return false;
+      const firstTok = yield* peek(s4);
+      const firstTag = tokenTag(firstTok);
+      // Must start with TypeIdent or type-param Ident
+      if (
+        firstTag !== "TypeIdent" &&
+        !(firstTag === "Ident" && typeParamSet.has(tokenValue(firstTok)))
+      )
+        return false;
+      // Check what follows the type name
+      const next = peekAt(s4, 1);
+      if (Option.isNone(next)) return true; // EOF after type name → newtype
+      const nextTok = next.value;
+      const nextTag = tokenTag(nextTok);
+      const nextVal = tokenValue(nextTok);
+      // If followed by `|`, `{`, TypeIdent, or type-param Ident → ADT
+      if (nextTag === "Delimiter" && nextVal === "|") return false;
+      if (nextTag === "Delimiter" && nextVal === "{") return false;
+      if (nextTag === "TypeIdent") return false;
+      if (nextTag === "Ident" && typeParamSet.has(nextVal)) return false;
+      return true;
+    });
+
+    if (isNewtype) {
+      const [typeTok, s5] = yield* advance(s4);
+      const wrappedType = new Ast.ConcreteType({
+        name: tokenValue(typeTok),
+        span: tokenSpan(typeTok),
+      });
+      return [
+        new Ast.NewtypeDecl({
+          name: typeName,
+          wrappedType,
+          span: Span.merge(tokenSpan(startTok), tokenSpan(typeTok)),
+        }),
+        s5,
+      ] as const;
+    }
 
     // Parse constructors separated by `|`
     const collectConstructors = (

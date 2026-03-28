@@ -229,6 +229,7 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap, mutNames: ReadonlySet<str
     Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls, mutNames)),
     Match.tag("Declare", () => ""),
     Match.tag("TypeDecl", () => ""),
+    Match.tag("NewtypeDecl", () => ""),
     Match.tag("Import", (s) => {
       const path = s.modulePath.map((p) => p.toLowerCase()).join("/");
       return `import { ${s.names.join(", ")} } from "./${path}"`;
@@ -525,6 +526,13 @@ const emitStatement = (
       );
       return lines.reduce((acc, line) => writeLine(acc, line), w1);
     }),
+    Match.tag("NewtypeDecl", (node) => {
+      const w1 = recordMapping(w, node.span);
+      return writeLine(
+        w1,
+        `const ${node.name} = (value) => Data.tagged("${node.name}")({ _0: value })`,
+      );
+    }),
     Match.tag("Import", (node) => {
       const w1 = recordMapping(w, node.span);
       const path = node.modulePath.map((p) => p.toLowerCase()).join("/");
@@ -625,7 +633,10 @@ const stmtContainsDotHandle = (stmt: Ast.Stmt): boolean =>
 const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const decls = collectDeclaredNames(program.statements);
   const hasForce = Arr.some(program.statements, (s) => s.node._tag === "ForceStatement");
-  const hasTypeDecl = Arr.some(program.statements, (s) => s.node._tag === "TypeDecl");
+  const hasTypeDecl = Arr.some(
+    program.statements,
+    (s) => s.node._tag === "TypeDecl" || s.node._tag === "NewtypeDecl",
+  );
   const hasMatch = Arr.some(program.statements, (s) => stmtContainsMatch(s.node));
   const stmtHasMutExpr = (stmt: TypedAst.TypedStmt): boolean =>
     stmt.node._tag === "ForceStatement" &&
