@@ -250,6 +250,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
       }),
     ),
     Match.tag("ComptimeExpr", (e) => evalExpr(e.expr, env)),
+    Match.tag("UseExpr", (e) => evalExpr(e.value, env)),
     Match.exhaustive,
   );
 
@@ -267,6 +268,12 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
     Match.tag("Declare", () => Effect.succeed(env)),
     Match.tag("ForceStatement", (s) =>
       Effect.gen(function* () {
+        // !use x = val → evaluate val, bind result to x
+        if (s.expr._tag === "Force" && s.expr.expr._tag === "UseExpr") {
+          const useExpr = s.expr.expr;
+          const value = yield* evalExpr(useExpr.value, env);
+          return HashMap.set(env, useExpr.name, value);
+        }
         yield* evalExpr(s.expr, env);
         return env;
       }),
@@ -492,7 +499,15 @@ export const evalProgram = (program: Ast.Program): Effect.Effect<Value, EvalErro
       } else if (stmt._tag === "Declare") {
         lastValue = Unit();
       } else if (stmt._tag === "ForceStatement") {
-        lastValue = yield* evalExpr(stmt.expr, env);
+        // !use x = val at program level → evaluate val, bind to x
+        if (stmt.expr._tag === "Force" && stmt.expr.expr._tag === "UseExpr") {
+          const useExpr = stmt.expr.expr;
+          const value = yield* evalExpr(useExpr.value, env);
+          env = HashMap.set(env, useExpr.name, value);
+          lastValue = value;
+        } else {
+          lastValue = yield* evalExpr(stmt.expr, env);
+        }
       } else if (stmt._tag === "ExprStatement") {
         lastValue = yield* evalExpr(stmt.expr, env);
       } else if (

@@ -44,7 +44,8 @@ const isAtom = (e: Ast.Expr): boolean => {
     tag === "Block" ||
     tag === "StringInterp" ||
     tag === "DotAccess" ||
-    tag === "ComptimeExpr"
+    tag === "ComptimeExpr" ||
+    tag === "UseExpr"
   );
 };
 
@@ -158,6 +159,9 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
       ]);
     }),
     Match.tag("ComptimeExpr", (e) => Doc.hcat([Doc.text("comptime "), formatExpr(e.expr)])),
+    Match.tag("UseExpr", (e) =>
+      Doc.hcat([Doc.text("use "), Doc.text(e.name), Doc.text(" = "), formatExpr(e.value)]),
+    ),
     Match.exhaustive,
   );
 

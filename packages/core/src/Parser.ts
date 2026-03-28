@@ -883,6 +883,21 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
       ] as const;
     }
 
+    if (tag === "Keyword" && tokenValue(t) === "use") {
+      const [startTok, s1] = yield* advance(s);
+      const [nameTok, s2] = yield* expect(s1, "Ident");
+      const [, s3] = yield* expect(s2, "Operator", "=");
+      const [value, s4] = yield* parseExpr(s3);
+      return [
+        new Ast.UseExpr({
+          name: tokenValue(nameTok),
+          value,
+          span: Span.merge(tokenSpan(startTok), value.span),
+        }),
+        s4,
+      ] as const;
+    }
+
     if (tag === "Delimiter" && tokenValue(t) === "{") {
       return yield* parseBlock(s);
     }

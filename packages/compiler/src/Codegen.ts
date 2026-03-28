@@ -221,11 +221,16 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap, mutNames: ReadonlySet<str
       const valueCode = emitExpr(s.value, decls, mutNames, hoisted);
       return [...prefixLines, `const ${s.name} = ${valueCode}`].join("\n  ");
     }),
-    Match.tag("ForceStatement", (s) =>
-      s.expr._tag === "Force"
+    Match.tag("ForceStatement", (s) => {
+      if (s.expr._tag === "Force" && s.expr.expr._tag === "UseExpr") {
+        const useExpr = s.expr.expr;
+        const valueCode = emitExpr(useExpr.value, decls, mutNames);
+        return `const ${useExpr.name} = yield* ${valueCode}`;
+      }
+      return s.expr._tag === "Force"
         ? `yield* ${emitExpr(s.expr.expr, decls, mutNames)}`
-        : `yield* ${emitExpr(s.expr, decls, mutNames)}`,
-    ),
+        : `yield* ${emitExpr(s.expr, decls, mutNames)}`;
+    }),
     Match.tag("ExprStatement", (s) => emitExpr(s.expr, decls, mutNames)),
     Match.tag("Declare", () => ""),
     Match.tag("TypeDecl", () => ""),
@@ -387,6 +392,10 @@ const emitExpr = (
       "ComptimeExpr",
       (e) => `/* comptime */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
     ),
+    Match.tag(
+      "UseExpr",
+      (e) => `/* use ${e.name} = */ ${emitExpr(e.value, decls, mutNames, hoistedNames)}`,
+    ),
     Match.tag("MatchExpr", (e) => {
       const scrutinee = emitExpr(e.scrutinee, decls, mutNames, hoistedNames);
       const arms = e.arms;
@@ -501,6 +510,11 @@ const emitStatement = (
     }),
     Match.tag("ForceStatement", (node) => {
       const w1 = recordMapping(w, node.span);
+      if (node.expr._tag === "Force" && node.expr.expr._tag === "UseExpr") {
+        const useExpr = node.expr.expr;
+        const valueCode = emitExpr(useExpr.value, decls, mutNames);
+        return writeLine(w1, `const ${useExpr.name} = yield* ${valueCode}`);
+      }
       if (node.expr._tag === "Force") {
         return writeLine(w1, `yield* ${emitExpr(node.expr.expr, decls, mutNames)}`);
       }
@@ -566,6 +580,7 @@ const exprContainsMatch = (expr: Ast.Expr): boolean =>
     Match.tag("App", (e) => exprContainsMatch(e.func) || e.args.some(exprContainsMatch)),
     Match.tag("Force", (e) => exprContainsMatch(e.expr)),
     Match.tag("ComptimeExpr", (e) => exprContainsMatch(e.expr)),
+    Match.tag("UseExpr", (e) => exprContainsMatch(e.value)),
     Match.orElse(() => false),
   );
 
@@ -597,6 +612,7 @@ const exprContainsDotMethod = (expr: Ast.Expr): boolean =>
     Match.tag("Lambda", (e) => exprContainsDotMethod(e.body)),
     Match.tag("Force", (e) => exprContainsDotMethod(e.expr)),
     Match.tag("ComptimeExpr", (e) => exprContainsDotMethod(e.expr)),
+    Match.tag("UseExpr", (e) => exprContainsDotMethod(e.value)),
     Match.orElse(() => false),
   );
 
@@ -626,6 +642,7 @@ const exprContainsDotHandle = (expr: Ast.Expr): boolean =>
     Match.tag("Lambda", (e) => exprContainsDotHandle(e.body)),
     Match.tag("Force", (e) => exprContainsDotHandle(e.expr)),
     Match.tag("ComptimeExpr", (e) => exprContainsDotHandle(e.expr)),
+    Match.tag("UseExpr", (e) => exprContainsDotHandle(e.value)),
     Match.orElse(() => false),
   );
 

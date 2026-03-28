@@ -132,6 +132,8 @@ const genMatchExpr = (depth: number) =>
 const genComptimeExpr = (depth: number) =>
   genExpr(depth - 1).map((expr) => new Ast.ComptimeExpr({ expr, span: s }));
 
+
+
 export const genExpr = (depth: number): fc.Arbitrary<Ast.Expr> =>
   depth <= 0
     ? fc.oneof(genIntLiteral, genStringLiteral, genBoolLiteral, genUnitLiteral)

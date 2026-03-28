@@ -121,6 +121,19 @@ const buildScope = (statements: ReadonlyArray<Ast.Stmt>, scope: Scope): Scope =>
           }),
         ),
       ),
+      Match.tag("ForceStatement", (s) => {
+        // !use x = val introduces x into scope
+        if (s.expr._tag === "Force" && s.expr.expr._tag === "UseExpr") {
+          const useName = s.expr.expr.name;
+          return HashMap.set(acc, useName, {
+            name: useName,
+            type: Option.none(),
+            effectClass: "signal" as const,
+            mutable: false,
+          });
+        }
+        return acc;
+      }),
       Match.orElse(() => acc),
     ),
   );
@@ -197,6 +210,7 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
     Match.tag("StringInterp", () => "signal" as const),
     Match.tag("MatchExpr", () => "signal" as const),
     Match.tag("ComptimeExpr", (e) => classifyExpr(e.expr, scope)),
+    Match.tag("UseExpr", () => "effect" as const),
     Match.exhaustive,
   );
 
@@ -332,6 +346,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
       }),
     ),
     Match.tag("ComptimeExpr", (e) => validateExprScope(e.expr, scope)),
+    Match.tag("UseExpr", (e) => validateExprScope(e.value, scope)),
     Match.exhaustive,
   );
 
