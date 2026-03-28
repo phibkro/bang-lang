@@ -336,6 +336,11 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
     Match.tag("NewtypeDecl", (s) =>
       Effect.succeed(HashMap.set(env, s.name, Constructor({ tag: s.name, arity: 1, applied: [] }))),
     ),
+    Match.tag("RecordTypeDecl", (s) =>
+      Effect.succeed(
+        HashMap.set(env, s.name, Constructor({ tag: s.name, arity: s.fields.length, applied: [] })),
+      ),
+    ),
     Match.tag("Import", () => Effect.succeed(env)),
     Match.tag("Export", () => Effect.succeed(env)),
     Match.exhaustive,
@@ -536,6 +541,7 @@ export const evalProgram = (program: Ast.Program): Effect.Effect<Value, EvalErro
       } else if (
         stmt._tag === "TypeDecl" ||
         stmt._tag === "NewtypeDecl" ||
+        stmt._tag === "RecordTypeDecl" ||
         stmt._tag === "Import" ||
         stmt._tag === "Export"
       ) {

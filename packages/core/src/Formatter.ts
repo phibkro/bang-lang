@@ -248,6 +248,22 @@ const formatTopLevelStmt = (stmt: Ast.Stmt): Doc.Doc<never> =>
     Match.tag("NewtypeDecl", (s) =>
       Doc.hcat([Doc.text("type "), Doc.text(s.name), Doc.text(" = "), formatType(s.wrappedType)]),
     ),
+    Match.tag("RecordTypeDecl", (s) => {
+      const fields = s.fields.map((f) =>
+        Doc.hcat([Doc.text(f.name), Doc.text(" : "), formatType(f.type)]),
+      );
+      const fieldList =
+        fields.length === 0
+          ? Doc.empty
+          : fields.reduce((a, b) => Doc.hcat([a, Doc.text(", "), b]));
+      return Doc.hcat([
+        Doc.text("type "),
+        Doc.text(s.name),
+        Doc.text(" = { "),
+        fieldList,
+        Doc.text(" }"),
+      ]);
+    }),
     Match.tag("Import", (s) =>
       Doc.text(`from ${s.modulePath.join(".")} import { ${s.names.join(", ")} }`),
     ),

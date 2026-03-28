@@ -235,6 +235,7 @@ const emitBlockStmt = (stmt: Ast.Stmt, decls: DeclMap, mutNames: ReadonlySet<str
     Match.tag("Declare", () => ""),
     Match.tag("TypeDecl", () => ""),
     Match.tag("NewtypeDecl", () => ""),
+    Match.tag("RecordTypeDecl", () => ""),
     Match.tag("Import", (s) => {
       const path = s.modulePath.map((p) => p.toLowerCase()).join("/");
       return `import { ${s.names.join(", ")} } from "./${path}"`;
@@ -554,6 +555,14 @@ const emitStatement = (
       return writeLine(
         w1,
         `const ${node.name} = (value) => Data.tagged("${node.name}")({ _0: value })`,
+      );
+    }),
+    Match.tag("RecordTypeDecl", (node) => {
+      const w1 = recordMapping(w, node.span);
+      const fields = node.fields.map((f) => f.name);
+      return writeLine(
+        w1,
+        `const ${node.name} = ({ ${fields.join(", ")} }) => Data.tagged("${node.name}")({ ${fields.join(", ")} })`,
       );
     }),
     Match.tag("Import", (node) => {

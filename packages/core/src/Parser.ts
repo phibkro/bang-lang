@@ -133,7 +133,7 @@ const parseProgram = (s: ParseState): P<Ast.Program> =>
 // Type declarations
 // ---------------------------------------------------------------------------
 
-const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl | Ast.NewtypeDecl> =>
+const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl | Ast.NewtypeDecl | Ast.RecordTypeDecl> =>
   Effect.gen(function* () {
     const [startTok, s1] = yield* expect(s, "Keyword", "type");
     const [nameTok, s2] = yield* expect(s1, "TypeIdent");
@@ -154,6 +154,27 @@ const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl | Ast.NewtypeDecl> =>
     const [typeParams, s3] = yield* collectParams([], s2);
     const typeParamSet = new Set(typeParams);
     const [, s4] = yield* expect(s3, "Operator", "=");
+
+    // Record type detection: after `=`, if `{` followed by `Ident :` → record type
+    const isRecordType = yield* Effect.gen(function* () {
+      const atEnd = yield* isAtEnd(s4);
+      if (atEnd) return false;
+      const firstTok = yield* peek(s4);
+      if (tokenTag(firstTok) !== "Delimiter" || tokenValue(firstTok) !== "{") return false;
+      const afterBrace = peekAt(s4, 1);
+      const afterIdent = peekAt(s4, 2);
+      return (
+        Option.isSome(afterBrace) &&
+        tokenTag(afterBrace.value) === "Ident" &&
+        Option.isSome(afterIdent) &&
+        tokenTag(afterIdent.value) === "Delimiter" &&
+        tokenValue(afterIdent.value) === ":"
+      );
+    });
+
+    if (isRecordType) {
+      return yield* parseRecordTypeFields(typeName, tokenSpan(startTok), s4);
+    }
 
     // Newtype detection: after `=`, if we see a single type (TypeIdent or type-param Ident)
     // NOT followed by `|`, `{`, or another TypeIdent/Ident — it's a newtype wrapper
@@ -223,6 +244,42 @@ const parseTypeDecl = (s: ParseState): P<Ast.TypeDecl | Ast.NewtypeDecl> =>
         span: Span.merge(tokenSpan(startTok), endSpan),
       }),
       s5,
+    ] as const;
+  });
+
+const parseRecordTypeFields = (
+  name: string,
+  startSpan: Span.Span,
+  s: ParseState,
+): P<Ast.RecordTypeDecl> =>
+  Effect.gen(function* () {
+    const [, s1] = yield* expect(s, "Delimiter", "{");
+    const fields: Array<{ name: string; type: Ast.Type }> = [];
+
+    const collectFields = (st: ParseState): Effect.Effect<readonly [typeof fields, ParseState], CompilerError> =>
+      Effect.gen(function* () {
+        const isClose = yield* check(st, "Delimiter", "}");
+        if (isClose) return [fields, st] as const;
+        if (fields.length > 0) {
+          const [, st2] = yield* expect(st, "Delimiter", ",");
+          st = st2;
+        }
+        const [fieldNameTok, st3] = yield* expect(st, "Ident");
+        const [, st4] = yield* expect(st3, "Delimiter", ":");
+        const [fieldType, st5] = yield* parsePrimaryType(st4);
+        fields.push({ name: tokenValue(fieldNameTok), type: fieldType });
+        return yield* collectFields(st5);
+      });
+
+    const [recordFields, s2] = yield* collectFields(s1);
+    const [endTok, s3] = yield* expect(s2, "Delimiter", "}");
+    return [
+      new Ast.RecordTypeDecl({
+        name,
+        fields: recordFields,
+        span: Span.merge(startSpan, tokenSpan(endTok)),
+      }),
+      s3,
     ] as const;
   });
 

@@ -277,6 +277,17 @@ export class NewtypeDecl extends Schema.TaggedClass<NewtypeDecl>()("NewtypeDecl"
   span: Span,
 }) {}
 
+export class RecordTypeDecl extends Schema.TaggedClass<RecordTypeDecl>()("RecordTypeDecl", {
+  name: Schema.String,
+  fields: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      type: Schema.suspend((): Schema.Schema<Type> => TypeSchema),
+    }),
+  ),
+  span: Span,
+}) {}
+
 const StmtSchema = Schema.suspend(() =>
   Schema.Union(
     Declaration,
@@ -285,6 +296,7 @@ const StmtSchema = Schema.suspend(() =>
     ExprStatement,
     TypeDecl,
     NewtypeDecl,
+    RecordTypeDecl,
     Import,
     Export,
   ),
@@ -346,6 +358,7 @@ export type Stmt =
   | ExprStatement
   | TypeDecl
   | NewtypeDecl
+  | RecordTypeDecl
   | Import
   | Export;
 
