@@ -57,19 +57,22 @@
     transaction logic, and resource lifecycle are all describable
     and passable before forcing.
 
-    PURE COMPUTATION DOES NOT NEED !
-    ────────────────────────────────
-    match, blocks, arithmetic, and function application are
-    pure computation. They evaluate without ! because they
-    don't cross the description/reality boundary:
+    THUNKS ALL THE WAY DOWN
+    ───────────────────────
+    Blocks, match, and all compound expressions are thunks.
+    Arithmetic and function application are pure values.
 
-    result = match x {          -- pure branching, no !
+    doubled = count * 2         -- pure value, no !
+    applied = f 42              -- pure application, no !
+
+    choice = match x {          -- thunk: describes a choice
       Some v -> v + 1
       None -> 0
     }
+    result = !choice            -- forces the choice
 
-    doubled = count * 2         -- pure computation, no !
-    applied = f 42              -- pure application, no !
+    computation = { x + 1 }    -- thunk: describes a computation
+    result = !computation       -- forces the computation
 
     THE PULL MODEL
     ──────────────
@@ -162,7 +165,7 @@ Statement   = Declaration
 Declaration = 'mut'? Ident '=' Expr
             | Ident ':' Type
             | Ident ':' Type Ident Param* '=' Block
-            | 'comptime' Ident '=' Expr
+            (* comptime is an expression, not a declaration qualifier *)
             | 'type' TypeIdent TypeVar* '=' TypeBody
             | 'declare' QualifiedIdent ':' Type
             ;
@@ -194,18 +197,22 @@ Field           = Ident ':' Type ;
 
     COMPTIME
     ────────
-    comptime qualifies a binding — "this thunk is intended to
-    be forced at compile time." ! is still the force. The compiler
-    schedules the force during compilation because of the annotation.
+    comptime is an expression, not a declaration qualifier.
+    It wraps an expression and marks it for compile-time evaluation.
 
-    table = comptime { buildSineTable () }
-    result = !table     -- compiler forces during compilation
+    table = comptime { buildSineTable () }  -- thunk
+    result = !table     -- compiler evaluates via interpreter
+
+    !comptime { inlineConstant () }  -- immediate compile-time force
 
     Composable:
     tableA = comptime { buildTable schemaA }
     tableB = comptime { buildTable schemaB }
     tables = comptime { merge tableA tableB }
     result = !tables    -- compiler forces the whole composition
+
+    An unforced comptime expression is unreachable and tree-shakable.
+    Lint warns on unused comptime expressions.
 
     FUNCTION DECLARATION
     ────────────────────
@@ -420,9 +427,7 @@ Field           = Ident ':' Type ;
    FORCE
    ───────────────────────────────────────── *)
 
-Force       = '!' Qualifier? Expr ;
-
-Qualifier   = 'comptime' ;
+Force       = '!' Expr ;
 
 (*
     Resolves by type of Expr:
@@ -651,11 +656,12 @@ Expr        = Expr '.' Ident Atom*          (* composition / field access *)
             | Expr 'and' Expr
             | Expr 'or' Expr
             | Expr 'xor' Expr
-            | '!' Qualifier? Expr           (* force with optional qualifier *)
+            | '!' Expr                      (* force *)
             | Expr '<-' Expr                (* mutation expression *)
             | 'on' Expr Expr                (* push subscription expression *)
             | 'use' Ident '=' Expr          (* resource acquisition expression *)
             | 'transaction' Block           (* STM transaction expression *)
+            | 'comptime' Expr              (* compile-time expression *)
             | Ident
             | Literal
             | Block
@@ -689,7 +695,7 @@ Block       = '{' Statement* Expr '}' ;
 
 
 (* ─────────────────────────────────────────
-   MATCH (expression, no ! needed)
+   MATCH (thunk expression, requires ! to force)
    ───────────────────────────────────────── *)
 
 Match       = 'match' Expr '{' Arm+ '}' ;
@@ -697,9 +703,13 @@ Match       = 'match' Expr '{' Arm+ '}' ;
 Arm         = Pattern '->' Expr ;
 
 (*
-    Match is pure computation — it selects a branch.
-    No ! needed. The arms may contain effects (their own !),
-    but the branching itself is pure.
+    Match is a thunk — it describes a choice.
+    ! forces the choice: inspects the scrutinee, selects an arm,
+    runs it. Match has its own effect scope: all arms contribute
+    to E and R regardless of which fires at runtime.
+
+    match expr { arms } is syntactic sugar for expr.match { arms }.
+    match, catch, and handle are the same primitive on different channels.
 
     Exhaustive — non-exhaustive match is a type error.
     All arms must return the same type.
@@ -1137,7 +1147,7 @@ TypeVar     = [a-z]+ ;
 
     x = expr                            const x = expr
     mut x = expr                        const x = yield* Ref.make(expr)
-    comptime x = expr                   const x = /* compile-time evaluated */
+    x = comptime { expr }               const x = /* compile-time evaluated */
     x = y = expr                        const _e = expr
                                         const y = _e; const x = _e
     x : T                               const x: T
