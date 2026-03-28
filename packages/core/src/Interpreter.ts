@@ -15,6 +15,15 @@ import {
   type Value,
 } from "./Value.js";
 
+const buildDottedName = (expr: Ast.Expr): Option.Option<string> =>
+  Match.value(expr).pipe(
+    Match.tag("Ident", (e) => Option.some(e.name)),
+    Match.tag("DotAccess", (e) =>
+      Option.map(buildDottedName(e.object), (obj) => `${obj}.${e.field}`),
+    ),
+    Match.orElse(() => Option.none()),
+  );
+
 const matchPattern = (pattern: Ast.Pattern, value: Value, env: Env): Option.Option<Env> =>
   Match.value(pattern).pipe(
     Match.tag("WildcardPattern", () => Option.some(env)),
@@ -101,12 +110,27 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
     ),
     Match.tag("Force", (e) => evalExpr(e.expr, env)),
     Match.tag("DotAccess", (e) =>
-      Effect.fail(
-        new EvalError({
-          message: "DotAccess not supported in interpreter v1",
-          span: e.span,
-        }),
-      ),
+      Effect.gen(function* () {
+        // Try dotted name lookup in env (e.g. Console.log)
+        const dottedName = buildDottedName(e);
+        if (Option.isSome(dottedName)) {
+          const found = HashMap.get(env, dottedName.value);
+          if (Option.isSome(found)) {
+            return found.value._tag === "MutCell" ? found.value.ref.value : found.value;
+          }
+        }
+        // Evaluate object and try field access on Tagged values
+        const obj = yield* evalExpr(e.object, env);
+        if (obj._tag === "Tagged" && obj.fields.length > 0 && e.field === "unwrap") {
+          return obj.fields[0];
+        }
+        return yield* Effect.fail(
+          new EvalError({
+            message: `Field access .${e.field} not supported on ${obj._tag}`,
+            span: e.span,
+          }),
+        );
+      }),
     ),
     Match.tag("Block", (e) =>
       Effect.gen(function* () {
@@ -122,6 +146,47 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
     ),
     Match.tag("App", (e) =>
       Effect.gen(function* () {
+        // Detect dot-method patterns: App(DotAccess(obj, method), args)
+        if (e.func._tag === "DotAccess") {
+          const method = e.func.field;
+
+          if (method === "map" && e.args.length === 1) {
+            const obj = yield* evalExpr(e.func.object, env);
+            const f = yield* evalExpr(e.args[0], env);
+            return yield* applyValue(f, [obj], e.span);
+          }
+
+          if (method === "tap" && e.args.length === 1) {
+            const obj = yield* evalExpr(e.func.object, env);
+            const f = yield* evalExpr(e.args[0], env);
+            yield* applyValue(f, [obj], e.span);
+            return obj;
+          }
+
+          if (method === "handle" && e.args.length === 2) {
+            const typeName = e.args[0]._tag === "Ident" ? e.args[0].name : "";
+            const impl = yield* evalExpr(e.args[1], env);
+            const handledEnv = HashMap.set(env, typeName, impl);
+            return yield* evalExpr(e.func.object, handledEnv);
+          }
+
+          if (method === "catch" && e.args.length >= 1) {
+            const errorTag = e.args[0]._tag === "Ident" ? e.args[0].name : "";
+            const handler =
+              e.args.length > 1
+                ? yield* evalExpr(e.args[1], env)
+                : Closure({ params: ["_"], body: e.args[0], env });
+            return yield* Effect.catchAll(evalExpr(e.func.object, env), (err) => {
+              if (err instanceof EvalError && err.message.includes(errorTag)) {
+                return applyValue(handler, [Str({ value: err.message })], e.span);
+              }
+              return Effect.fail(err);
+            });
+          }
+
+          // Not a known dot method — fall through to normal application
+        }
+
         const func = yield* evalExpr(e.func, env);
 
         const args: Value[] = [];
@@ -234,6 +299,22 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
     Match.tag("Export", () => Effect.succeed(env)),
     Match.exhaustive,
   );
+
+const applyValue = (
+  func: Value,
+  args: Value[],
+  span: Span.Span,
+): Effect.Effect<Value, EvalError> => {
+  if (func._tag === "Closure") return applyClosure(func, args, span);
+  if (func._tag === "Constructor") {
+    const allApplied = [...func.applied, ...args];
+    if (allApplied.length >= func.arity) {
+      return Effect.succeed(Tagged({ tag: func.tag, fields: allApplied }));
+    }
+    return Effect.succeed(Constructor({ tag: func.tag, arity: func.arity, applied: allApplied }));
+  }
+  return Effect.fail(new EvalError({ message: "Cannot apply non-function", span }));
+};
 
 const applyClosure = (
   closure: Extract<Value, { _tag: "Closure" }>,

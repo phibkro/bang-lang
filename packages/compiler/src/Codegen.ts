@@ -270,6 +270,41 @@ const emitExpr = (
       }),
     ),
     Match.tag("App", (e) => {
+      // Detect dot-method patterns: App(DotAccess(obj, method), args)
+      if (e.func._tag === "DotAccess") {
+        const method = e.func.field;
+        const obj = emitExpr(e.func.object, decls, mutNames, hoistedNames);
+
+        if (method === "handle" && e.args.length === 2) {
+          const typeName =
+            e.args[0]._tag === "Ident"
+              ? e.args[0].name
+              : emitExpr(e.args[0], decls, mutNames, hoistedNames);
+          const impl = emitExpr(e.args[1], decls, mutNames, hoistedNames);
+          return `pipe(${obj}, Effect.provide(Layer.succeed(${typeName}, ${impl})))`;
+        }
+        if (method === "catch" && e.args.length >= 1) {
+          const tag =
+            e.args[0]._tag === "Ident"
+              ? `"${e.args[0].name}"`
+              : emitExpr(e.args[0], decls, mutNames, hoistedNames);
+          const handler =
+            e.args.length > 1
+              ? emitExpr(e.args[1], decls, mutNames, hoistedNames)
+              : "(_) => Effect.void";
+          return `pipe(${obj}, Effect.catchTag(${tag}, ${handler}))`;
+        }
+        if (method === "map" && e.args.length === 1) {
+          const f = emitExpr(e.args[0], decls, mutNames, hoistedNames);
+          return `pipe(${obj}, Effect.map(${f}))`;
+        }
+        if (method === "tap" && e.args.length === 1) {
+          const f = emitExpr(e.args[0], decls, mutNames, hoistedNames);
+          return `pipe(${obj}, Effect.tap(${f}))`;
+        }
+        // Not a known dot method — fall through to normal App handling
+      }
+
       const funcCode = emitExpr(e.func, decls, mutNames, hoistedNames);
       // Check if the function is a declared wrapper (use comma-separated args)
       const dottedName = buildDottedName(e.func);
@@ -498,6 +533,64 @@ const stmtContainsMatch = (stmt: Ast.Stmt): boolean =>
     Match.orElse(() => false),
   );
 
+const DOT_METHODS = new Set(["handle", "catch", "map", "tap"]);
+
+const exprContainsDotMethod = (expr: Ast.Expr): boolean =>
+  Match.value(expr).pipe(
+    Match.tag(
+      "App",
+      (e) =>
+        (e.func._tag === "DotAccess" && DOT_METHODS.has(e.func.field)) ||
+        exprContainsDotMethod(e.func) ||
+        e.args.some(exprContainsDotMethod),
+    ),
+    Match.tag("BinaryExpr", (e) => exprContainsDotMethod(e.left) || exprContainsDotMethod(e.right)),
+    Match.tag("UnaryExpr", (e) => exprContainsDotMethod(e.expr)),
+    Match.tag(
+      "Block",
+      (e) => e.statements.some((s) => stmtContainsDotMethod(s)) || exprContainsDotMethod(e.expr),
+    ),
+    Match.tag("Lambda", (e) => exprContainsDotMethod(e.body)),
+    Match.tag("Force", (e) => exprContainsDotMethod(e.expr)),
+    Match.orElse(() => false),
+  );
+
+const stmtContainsDotMethod = (stmt: Ast.Stmt): boolean =>
+  Match.value(stmt).pipe(
+    Match.tag("Declaration", (s) => exprContainsDotMethod(s.value)),
+    Match.tag("ExprStatement", (s) => exprContainsDotMethod(s.expr)),
+    Match.tag("ForceStatement", (s) => exprContainsDotMethod(s.expr)),
+    Match.orElse(() => false),
+  );
+
+const exprContainsDotHandle = (expr: Ast.Expr): boolean =>
+  Match.value(expr).pipe(
+    Match.tag(
+      "App",
+      (e) =>
+        (e.func._tag === "DotAccess" && e.func.field === "handle") ||
+        exprContainsDotHandle(e.func) ||
+        e.args.some(exprContainsDotHandle),
+    ),
+    Match.tag("BinaryExpr", (e) => exprContainsDotHandle(e.left) || exprContainsDotHandle(e.right)),
+    Match.tag("UnaryExpr", (e) => exprContainsDotHandle(e.expr)),
+    Match.tag(
+      "Block",
+      (e) => e.statements.some((s) => stmtContainsDotHandle(s)) || exprContainsDotHandle(e.expr),
+    ),
+    Match.tag("Lambda", (e) => exprContainsDotHandle(e.body)),
+    Match.tag("Force", (e) => exprContainsDotHandle(e.expr)),
+    Match.orElse(() => false),
+  );
+
+const stmtContainsDotHandle = (stmt: Ast.Stmt): boolean =>
+  Match.value(stmt).pipe(
+    Match.tag("Declaration", (s) => exprContainsDotHandle(s.value)),
+    Match.tag("ExprStatement", (s) => exprContainsDotHandle(s.expr)),
+    Match.tag("ForceStatement", (s) => exprContainsDotHandle(s.expr)),
+    Match.orElse(() => false),
+  );
+
 const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const decls = collectDeclaredNames(program.statements);
   const hasForce = Arr.some(program.statements, (s) => s.node._tag === "ForceStatement");
@@ -512,7 +605,9 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
     program.statements,
     (s) => (s.node._tag === "Declaration" && s.node.mutable) || stmtHasMutExpr(s),
   );
-  const needsEffectImport = HashMap.size(decls) > 0 || hasForce || hasMut;
+  const hasDotMethod = Arr.some(program.statements, (s) => stmtContainsDotMethod(s.node));
+  const hasDotHandle = Arr.some(program.statements, (s) => stmtContainsDotHandle(s.node));
+  const needsEffectImport = HashMap.size(decls) > 0 || hasForce || hasMut || hasDotMethod;
   const needsDataImport = hasTypeDecl;
 
   // Collect mutable binding names for Ref.get emission
@@ -529,6 +624,8 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   if (hasMut) imports.push("Ref");
   if (needsDataImport) imports.push("Data");
   if (hasMatch) imports.push("Match");
+  if (hasDotMethod) imports.push("pipe");
+  if (hasDotHandle) imports.push("Layer");
   const w0 =
     imports.length > 0
       ? writeBlankLine(writeLine(emptyWriter, `import { ${imports.join(", ")} } from "effect"`))
