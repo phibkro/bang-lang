@@ -119,7 +119,7 @@ const genMatchExpr = (depth: number) =>
       fc.array(
         fc
           .tuple(genPattern(0), genExpr(depth - 1))
-          .map(([pat, body]) => new Ast.Arm({ pattern: pat, body, span: s })),
+          .map(([pat, body]) => new Ast.Arm({ pattern: pat, guard: Option.none(), body, span: s })),
         { minLength: 1, maxLength: 3 },
       ),
     )

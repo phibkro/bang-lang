@@ -401,9 +401,11 @@ const emitExpr = (
         const arm = arms[i];
         const isLast = i === arms.length - 1;
         const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
+        const hasGuard = Option.isSome(arm.guard);
+        const guardCode = hasGuard ? emitExpr(arm.guard.value, decls, mutNames, hoistedNames) : "";
 
-        if (isLast && (lastIsWildcard || lastIsBinding)) {
-          // Last arm is wildcard or binding — use orElse
+        if (isLast && (lastIsWildcard || lastIsBinding) && !hasGuard) {
+          // Last arm is wildcard or binding without guard — use orElse
           if (lastIsBinding && arm.pattern._tag === "BindingPattern") {
             parts.push(`Match.orElse((${arm.pattern.name}) => ${body})`);
           } else {
@@ -411,7 +413,21 @@ const emitExpr = (
           }
         } else if (arm.pattern._tag === "ConstructorPattern") {
           const pat = arm.pattern;
-          if (pat.patterns.length === 0) {
+          if (hasGuard) {
+            // Guard present — use Match.when with tag check + guard
+            const bindings = pat.patterns.map((sub, idx) => {
+              if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
+              return `_${idx}`;
+            });
+            const destructure = pat.patterns.length > 0 ? `({ ${bindings.join(", ")} })` : `()`;
+            const tagCheck = `_v._tag === "${pat.tag}"`;
+            // Emit guard with bindings in scope via IIFE
+            const guardPred =
+              pat.patterns.length > 0 ? `(${destructure} => ${guardCode})(${`_v`})` : guardCode;
+            parts.push(
+              `Match.when((_v) => ${tagCheck} && ${guardPred}, ${destructure} => ${body})`,
+            );
+          } else if (pat.patterns.length === 0) {
             parts.push(`Match.tag("${pat.tag}", () => ${body})`);
           } else {
             const bindings = pat.patterns.map((sub, idx) => {
@@ -422,13 +438,28 @@ const emitExpr = (
           }
         } else if (arm.pattern._tag === "LiteralPattern") {
           const litVal = emitExpr(arm.pattern.value, decls, mutNames, hoistedNames);
-          parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
+          if (hasGuard) {
+            parts.push(`Match.when((v) => v === ${litVal} && ${guardCode}, () => ${body})`);
+          } else {
+            parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
+          }
         } else if (arm.pattern._tag === "BindingPattern") {
-          // Non-last binding pattern — use Match.when that always matches
-          parts.push(`Match.when(() => true, (${arm.pattern.name}) => ${body})`);
+          if (hasGuard) {
+            parts.push(
+              `Match.when((${arm.pattern.name}) => ${guardCode}, (${arm.pattern.name}) => ${body})`,
+            );
+          } else {
+            // Non-last binding pattern — use Match.when that always matches
+            parts.push(`Match.when(() => true, (${arm.pattern.name}) => ${body})`);
+          }
         } else {
-          // WildcardPattern not at end — use Match.when that always matches
-          parts.push(`Match.when(() => true, () => ${body})`);
+          // WildcardPattern
+          if (hasGuard) {
+            parts.push(`Match.when(() => ${guardCode}, () => ${body})`);
+          } else {
+            // WildcardPattern not at end — use Match.when that always matches
+            parts.push(`Match.when(() => true, () => ${body})`);
+          }
         }
       }
 

@@ -888,21 +888,33 @@ const parseMatch = (s: ParseState): P<Ast.MatchExpr> =>
 const parseArm = (s: ParseState): P<Ast.Arm> =>
   Effect.gen(function* () {
     const [pattern, s1] = yield* parsePattern(s);
-    const [, s2] = yield* expect(s1, "Operator", "->");
-    const [body, s3] = yield* parseExpr(s2);
+    // Optional guard: `if expr`
+    const hasGuard = yield* check(s1, "Keyword", "if");
+    let guard: Option.Option<Ast.Expr> = Option.none();
+    let guardState = s1;
+    if (hasGuard) {
+      const [, s2] = yield* advance(s1); // consume `if`
+      const [gExpr, s3] = yield* parseExpr(s2);
+      guard = Option.some(gExpr);
+      guardState = s3;
+    }
+    const [, s4] = yield* expect(guardState, "Operator", "->");
+    const [body, s5] = yield* parseExpr(s4);
     return [
       new Ast.Arm({
         pattern,
+        guard,
         body,
         span: Span.merge(pattern.span, body.span),
       }),
-      s3,
+      s5,
     ] as const;
   });
 
 const isPatternTerminator = (t: Token): boolean => {
   const tag = tokenTag(t);
   if (tag === "Operator" && tokenValue(t) === "->") return true;
+  if (tag === "Keyword" && tokenValue(t) === "if") return true;
   if (tag === "Delimiter") {
     const v = tokenValue(t);
     return v === "," || v === "}" || v === ")";

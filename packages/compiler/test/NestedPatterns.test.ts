@@ -53,3 +53,53 @@ describe("Nested patterns", () => {
     }),
   );
 });
+
+describe("Pattern guards", () => {
+  it.effect("guard filters arm", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource('x = !match 5 { n if n > 0 -> "pos", _ -> "other" }');
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Str({ value: "pos" }));
+    }),
+  );
+
+  it.effect("guard falls through on false", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource('x = !match 0 { n if n > 0 -> "pos", _ -> "other" }');
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Str({ value: "other" }));
+    }),
+  );
+
+  it.effect("guard with constructor pattern", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource(
+        'type Maybe a = Some a | None\nx = !match (Some 10) { Some v if v > 5 -> "big", Some v -> "small", None -> "none" }',
+      );
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Str({ value: "big" }));
+    }),
+  );
+
+  it.effect("guard with constructor pattern falls through", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource(
+        'type Maybe a = Some a | None\nx = !match (Some 3) { Some v if v > 5 -> "big", Some v -> "small", None -> "none" }',
+      );
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Str({ value: "small" }));
+    }),
+  );
+
+  it.effect("guard parses correctly in AST", () =>
+    Effect.gen(function* () {
+      const ast = yield* parseSource('x = match 5 { n if n > 0 -> "pos", _ -> "other" }');
+      const decl = ast.statements[0];
+      if (decl._tag === "Declaration" && decl.value._tag === "MatchExpr") {
+        const arm0 = decl.value.arms[0];
+        expect(arm0.pattern._tag).toBe("BindingPattern");
+        expect(arm0.guard._tag).toBe("Some");
+      }
+    }),
+  );
+});

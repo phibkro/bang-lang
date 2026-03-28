@@ -315,6 +315,9 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
         yield* validateExprScope(e.scrutinee, scope);
         for (const arm of e.arms) {
           const armScope = bindPatternNames(arm.pattern, scope);
+          if (Option.isSome(arm.guard)) {
+            yield* validateExprScope(arm.guard.value, armScope);
+          }
           yield* validateExprScope(arm.body, armScope);
         }
       }),

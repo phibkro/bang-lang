@@ -136,8 +136,11 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
       const scrutinee = formatExpr(e.scrutinee);
       const arms = e.arms.map((arm) => {
         const pat = formatPattern(arm.pattern);
+        const guardDoc = Option.isSome(arm.guard)
+          ? Doc.hcat([Doc.text(" if "), formatExpr(arm.guard.value)])
+          : Doc.empty;
         const body = formatExpr(arm.body);
-        return Doc.hcat([pat, Doc.text(" -> "), body]);
+        return Doc.hcat([pat, guardDoc, Doc.text(" -> "), body]);
       });
       if (arms.length === 0) {
         return Doc.hcat([Doc.text("match "), scrutinee, Doc.text(" {}")]);

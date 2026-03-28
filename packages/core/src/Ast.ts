@@ -178,6 +178,7 @@ export class StringInterp extends Schema.TaggedClass<StringInterp>()("StringInte
 
 export class Arm extends Schema.TaggedClass<Arm>()("Arm", {
   pattern: Schema.suspend((): Schema.Schema<Pattern> => PatternSchema),
+  guard: Schema.OptionFromUndefinedOr(Schema.suspend((): Schema.Schema<Expr> => ExprSchema)),
   body: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
   span: Span,
 }) {}

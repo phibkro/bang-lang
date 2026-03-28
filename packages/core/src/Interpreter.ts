@@ -234,6 +234,13 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
         for (const arm of e.arms) {
           const result = matchPattern(arm.pattern, scrutinee, env);
           if (Option.isSome(result)) {
+            // Check guard if present
+            if (Option.isSome(arm.guard)) {
+              const guardVal = yield* evalExpr(arm.guard.value, result.value);
+              if (guardVal._tag !== "Bool" || !guardVal.value) {
+                continue; // guard failed, try next arm
+              }
+            }
             return yield* evalExpr(arm.body, result.value);
           }
         }
