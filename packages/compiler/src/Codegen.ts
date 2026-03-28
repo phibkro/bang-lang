@@ -383,6 +383,10 @@ const emitExpr = (
         .join("");
       return `\`${inner}\``;
     }),
+    Match.tag(
+      "ComptimeExpr",
+      (e) => `/* comptime */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+    ),
     Match.tag("MatchExpr", (e) => {
       const scrutinee = emitExpr(e.scrutinee, decls, mutNames, hoistedNames);
       const arms = e.arms;
@@ -561,6 +565,7 @@ const exprContainsMatch = (expr: Ast.Expr): boolean =>
     Match.tag("Lambda", (e) => exprContainsMatch(e.body)),
     Match.tag("App", (e) => exprContainsMatch(e.func) || e.args.some(exprContainsMatch)),
     Match.tag("Force", (e) => exprContainsMatch(e.expr)),
+    Match.tag("ComptimeExpr", (e) => exprContainsMatch(e.expr)),
     Match.orElse(() => false),
   );
 
@@ -591,6 +596,7 @@ const exprContainsDotMethod = (expr: Ast.Expr): boolean =>
     ),
     Match.tag("Lambda", (e) => exprContainsDotMethod(e.body)),
     Match.tag("Force", (e) => exprContainsDotMethod(e.expr)),
+    Match.tag("ComptimeExpr", (e) => exprContainsDotMethod(e.expr)),
     Match.orElse(() => false),
   );
 
@@ -619,6 +625,7 @@ const exprContainsDotHandle = (expr: Ast.Expr): boolean =>
     ),
     Match.tag("Lambda", (e) => exprContainsDotHandle(e.body)),
     Match.tag("Force", (e) => exprContainsDotHandle(e.expr)),
+    Match.tag("ComptimeExpr", (e) => exprContainsDotHandle(e.expr)),
     Match.orElse(() => false),
   );
 

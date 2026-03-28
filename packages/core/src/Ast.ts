@@ -86,6 +86,7 @@ const ExprSchema: Schema.Schema<Expr> = Schema.suspend(() =>
     UnaryExpr,
     StringInterp,
     MatchExpr,
+    ComptimeExpr,
   ),
 );
 
@@ -189,6 +190,11 @@ export class MatchExpr extends Schema.TaggedClass<MatchExpr>()("MatchExpr", {
   span: Span,
 }) {}
 
+export class ComptimeExpr extends Schema.TaggedClass<ComptimeExpr>()("ComptimeExpr", {
+  expr: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
 export type Expr =
   | Ident
   | DotAccess
@@ -204,7 +210,8 @@ export type Expr =
   | BinaryExpr
   | UnaryExpr
   | StringInterp
-  | MatchExpr;
+  | MatchExpr
+  | ComptimeExpr;
 
 // ---------------------------------------------------------------------------
 // Constructor nodes (for TypeDecl)

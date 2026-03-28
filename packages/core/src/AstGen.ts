@@ -129,6 +129,9 @@ const genMatchExpr = (depth: number) =>
 // Composite expression generator
 // ---------------------------------------------------------------------------
 
+const genComptimeExpr = (depth: number) =>
+  genExpr(depth - 1).map((expr) => new Ast.ComptimeExpr({ expr, span: s }));
+
 export const genExpr = (depth: number): fc.Arbitrary<Ast.Expr> =>
   depth <= 0
     ? fc.oneof(genIntLiteral, genStringLiteral, genBoolLiteral, genUnitLiteral)
@@ -142,6 +145,7 @@ export const genExpr = (depth: number): fc.Arbitrary<Ast.Expr> =>
         genBlock(depth),
         genLambda(depth),
         genMatchExpr(depth),
+        genComptimeExpr(depth),
       );
 
 // ---------------------------------------------------------------------------

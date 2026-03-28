@@ -249,6 +249,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
         );
       }),
     ),
+    Match.tag("ComptimeExpr", (e) => evalExpr(e.expr, env)),
     Match.exhaustive,
   );
 

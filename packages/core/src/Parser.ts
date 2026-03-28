@@ -874,6 +874,15 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
       return yield* parseMatch(s);
     }
 
+    if (tag === "Keyword" && tokenValue(t) === "comptime") {
+      const [startTok, s1] = yield* advance(s);
+      const [expr, s2] = yield* parsePrimary(s1);
+      return [
+        new Ast.ComptimeExpr({ expr, span: Span.merge(tokenSpan(startTok), expr.span) }),
+        s2,
+      ] as const;
+    }
+
     if (tag === "Delimiter" && tokenValue(t) === "{") {
       return yield* parseBlock(s);
     }

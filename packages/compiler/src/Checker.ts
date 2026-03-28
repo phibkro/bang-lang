@@ -196,6 +196,7 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
     }),
     Match.tag("StringInterp", () => "signal" as const),
     Match.tag("MatchExpr", () => "signal" as const),
+    Match.tag("ComptimeExpr", (e) => classifyExpr(e.expr, scope)),
     Match.exhaustive,
   );
 
@@ -330,6 +331,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
         }
       }),
     ),
+    Match.tag("ComptimeExpr", (e) => validateExprScope(e.expr, scope)),
     Match.exhaustive,
   );
 

@@ -1,5 +1,5 @@
 import { Data, Effect, HashMap, Schema } from "effect";
-import type * as Ast from "./Ast.js";
+import * as Ast from "./Ast.js";
 import * as Span from "./Span.js";
 
 export type Value = Data.TaggedEnum<{
@@ -74,4 +74,27 @@ export const coerceToString = (v: Value): Effect.Effect<string, EvalError> =>
       Effect.succeed(t.fields.length === 0 ? t.tag : `${t.tag}(${t.fields.length} fields)`),
     Constructor: (c) => Effect.succeed(`<Constructor:${c.tag}/${c.arity}>`),
     MutCell: (m) => coerceToString(m.ref.value),
+  });
+
+export const valueToAst = (v: Value, span: Span.Span): Ast.Expr =>
+  $match(v, {
+    Num: (n) =>
+      Number.isInteger(n.value)
+        ? new Ast.IntLiteral({ value: n.value, span })
+        : new Ast.FloatLiteral({ value: n.value, span }),
+    Str: (s) => new Ast.StringLiteral({ value: s.value, span }),
+    Bool: (b) => new Ast.BoolLiteral({ value: b.value, span }),
+    Unit: () => new Ast.UnitLiteral({ span }),
+    Closure: () => {
+      throw new Error("Cannot convert Closure to AST literal");
+    },
+    Tagged: () => {
+      throw new Error("Cannot convert Tagged to AST literal");
+    },
+    Constructor: () => {
+      throw new Error("Cannot convert Constructor to AST literal");
+    },
+    MutCell: () => {
+      throw new Error("Cannot convert MutCell to AST literal");
+    },
   });
