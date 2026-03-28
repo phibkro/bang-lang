@@ -883,6 +883,16 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
       ] as const;
     }
 
+    if (tag === "Keyword" && tokenValue(t) === "on") {
+      const [startTok, s1] = yield* advance(s);
+      const [source, s2] = yield* parsePrimary(s1);
+      const [handler, s3] = yield* parseExpr(s2);
+      return [
+        new Ast.OnExpr({ source, handler, span: Span.merge(tokenSpan(startTok), handler.span) }),
+        s3,
+      ] as const;
+    }
+
     if (tag === "Keyword" && tokenValue(t) === "use") {
       const [startTok, s1] = yield* advance(s);
       const [nameTok, s2] = yield* expect(s1, "Ident");

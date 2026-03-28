@@ -88,6 +88,7 @@ const ExprSchema: Schema.Schema<Expr> = Schema.suspend(() =>
     MatchExpr,
     ComptimeExpr,
     UseExpr,
+    OnExpr,
   ),
 );
 
@@ -202,6 +203,12 @@ export class UseExpr extends Schema.TaggedClass<UseExpr>()("UseExpr", {
   span: Span,
 }) {}
 
+export class OnExpr extends Schema.TaggedClass<OnExpr>()("OnExpr", {
+  source: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  handler: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
 export type Expr =
   | Ident
   | DotAccess
@@ -219,7 +226,8 @@ export type Expr =
   | StringInterp
   | MatchExpr
   | ComptimeExpr
-  | UseExpr;
+  | UseExpr
+  | OnExpr;
 
 // ---------------------------------------------------------------------------
 // Constructor nodes (for TypeDecl)

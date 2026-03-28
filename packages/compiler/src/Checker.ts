@@ -211,6 +211,7 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
     Match.tag("MatchExpr", () => "signal" as const),
     Match.tag("ComptimeExpr", (e) => classifyExpr(e.expr, scope)),
     Match.tag("UseExpr", () => "effect" as const),
+    Match.tag("OnExpr", () => "effect" as const),
     Match.exhaustive,
   );
 
@@ -347,6 +348,11 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     ),
     Match.tag("ComptimeExpr", (e) => validateExprScope(e.expr, scope)),
     Match.tag("UseExpr", (e) => validateExprScope(e.value, scope)),
+    Match.tag("OnExpr", (e) =>
+      Effect.flatMap(validateExprScope(e.source, scope), () =>
+        validateExprScope(e.handler, scope),
+      ),
+    ),
     Match.exhaustive,
   );
 
@@ -443,6 +449,125 @@ const checkStmt = (
   );
 
 // ---------------------------------------------------------------------------
+// Cycle detection for `on` subscriptions
+// ---------------------------------------------------------------------------
+
+/** Collect mutation targets (names on left side of `<-`) from an expression tree. */
+const collectMutationTargets = (expr: Ast.Expr): ReadonlyArray<string> => {
+  const targets: string[] = [];
+  const walk = (e: Ast.Expr): void => {
+    if (e._tag === "BinaryExpr" && e.op === "<-" && e.left._tag === "Ident") {
+      targets.push(e.left.name);
+    }
+    if (e._tag === "BinaryExpr") {
+      walk(e.left);
+      walk(e.right);
+    }
+    if (e._tag === "UnaryExpr") walk(e.expr);
+    if (e._tag === "Force") walk(e.expr);
+    if (e._tag === "Block") {
+      for (const s of e.statements) {
+        if (s._tag === "ForceStatement") walk(s.expr);
+        if (s._tag === "ExprStatement") walk(s.expr);
+        if (s._tag === "Declaration") walk(s.value);
+      }
+      walk(e.expr);
+    }
+    if (e._tag === "Lambda") walk(e.body);
+    if (e._tag === "App") {
+      walk(e.func);
+      for (const a of e.args) walk(a);
+    }
+    if (e._tag === "OnExpr") {
+      walk(e.source);
+      walk(e.handler);
+    }
+  };
+  walk(expr);
+  return targets;
+};
+
+/** Collect on-subscription edges from statements: source -> mutation targets in handler. */
+const collectOnEdges = (
+  stmts: ReadonlyArray<Ast.Stmt>,
+): ReadonlyArray<{ source: string; targets: ReadonlyArray<string>; span: Ast.OnExpr["span"] }> => {
+  const edges: Array<{ source: string; targets: ReadonlyArray<string>; span: Ast.OnExpr["span"] }> =
+    [];
+  const walkExpr = (e: Ast.Expr): void => {
+    if (e._tag === "OnExpr") {
+      const sourceName = e.source._tag === "Ident" ? e.source.name : "";
+      if (sourceName) {
+        const targets = collectMutationTargets(e.handler);
+        edges.push({ source: sourceName, targets, span: e.span });
+      }
+    }
+    if (e._tag === "Block") {
+      for (const s of e.statements) walkStmt(s);
+      walkExpr(e.expr);
+    }
+    if (e._tag === "Force") walkExpr(e.expr);
+    if (e._tag === "Lambda") walkExpr(e.body);
+    if (e._tag === "App") {
+      walkExpr(e.func);
+      for (const a of e.args) walkExpr(a);
+    }
+    if (e._tag === "BinaryExpr") {
+      walkExpr(e.left);
+      walkExpr(e.right);
+    }
+  };
+  const walkStmt = (s: Ast.Stmt): void => {
+    if (s._tag === "ForceStatement") walkExpr(s.expr);
+    if (s._tag === "ExprStatement") walkExpr(s.expr);
+    if (s._tag === "Declaration") walkExpr(s.value);
+  };
+  for (const s of stmts) walkStmt(s);
+  return edges;
+};
+
+/** Detect cycles in on-subscription graph via DFS. */
+const detectOnCycles = (
+  stmts: ReadonlyArray<Ast.Stmt>,
+): Effect.Effect<void, CompilerError> => {
+  const edges = collectOnEdges(stmts);
+  // Build adjacency list: source -> targets
+  const graph = new Map<string, string[]>();
+  const spanMap = new Map<string, Ast.OnExpr["span"]>();
+  for (const edge of edges) {
+    const existing = graph.get(edge.source) ?? [];
+    existing.push(...edge.targets);
+    graph.set(edge.source, existing);
+    if (!spanMap.has(edge.source)) spanMap.set(edge.source, edge.span);
+  }
+  // DFS cycle detection
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+  const hasCycle = (node: string): boolean => {
+    if (inStack.has(node)) return true;
+    if (visited.has(node)) return false;
+    visited.add(node);
+    inStack.add(node);
+    for (const neighbor of graph.get(node) ?? []) {
+      if (hasCycle(neighbor)) return true;
+    }
+    inStack.delete(node);
+    return false;
+  };
+  for (const node of graph.keys()) {
+    if (hasCycle(node)) {
+      const span = spanMap.get(node) ?? Span.empty;
+      return Effect.fail(
+        new CheckError({
+          message: `Subscription cycle detected: on ${node} handler mutates back to ${node}`,
+          span,
+        }),
+      );
+    }
+  }
+  return Effect.void;
+};
+
+// ---------------------------------------------------------------------------
 // Check program
 // ---------------------------------------------------------------------------
 
@@ -450,6 +575,8 @@ const checkProgram = (program: Ast.Program): Effect.Effect<TypedAst.TypedProgram
   Effect.gen(function* () {
     const scope = buildScope(program.statements, HashMap.empty());
     const statements = yield* Effect.forEach(program.statements, (stmt) => checkStmt(stmt, scope));
+    // Post-pass: detect subscription cycles
+    yield* detectOnCycles(program.statements);
     return { _tag: "Program" as const, statements: [...statements], span: program.span };
   });
 

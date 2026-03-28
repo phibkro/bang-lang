@@ -95,6 +95,10 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
           }
           const newValue = yield* evalExpr(e.right, env);
           cell.value.ref.value = newValue;
+          // Fire subscribers
+          for (const sub of cell.value.ref.subscribers) {
+            yield* sub(newValue);
+          }
           return newValue;
         }
         const left = yield* evalExpr(e.left, env);
@@ -251,6 +255,25 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
     ),
     Match.tag("ComptimeExpr", (e) => evalExpr(e.expr, env)),
     Match.tag("UseExpr", (e) => evalExpr(e.value, env)),
+    Match.tag("OnExpr", (e) =>
+      Effect.gen(function* () {
+        // Source must resolve to a MutCell
+        const sourceName = e.source._tag === "Ident" ? e.source.name : "";
+        const sourceCell = HashMap.get(env, sourceName);
+        if (Option.isNone(sourceCell) || sourceCell.value._tag !== "MutCell") {
+          return yield* Effect.fail(
+            new EvalError({ message: "on requires a mut binding", span: e.span }),
+          );
+        }
+        // Evaluate handler (should be a Closure)
+        const handler = yield* evalExpr(e.handler, env);
+        // Register subscriber
+        const sub = (newValue: Value) => applyValue(handler, [newValue], e.span).pipe(Effect.asVoid);
+        sourceCell.value.ref.subscribers.push(sub);
+        // Return Unit (subscription is a side effect)
+        return Unit();
+      }),
+    ),
     Match.exhaustive,
   );
 
@@ -260,7 +283,7 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
       Effect.gen(function* () {
         const value = yield* evalExpr(s.value, env);
         if (s.mutable) {
-          return HashMap.set(env, s.name, MutCell({ ref: { value } }));
+          return HashMap.set(env, s.name, MutCell({ ref: { value, subscribers: [] } }));
         }
         return HashMap.set(env, s.name, value);
       }),
@@ -491,7 +514,7 @@ export const evalProgram = (program: Ast.Program): Effect.Effect<Value, EvalErro
       if (stmt._tag === "Declaration") {
         const val = yield* evalExpr(stmt.value, env);
         if (stmt.mutable) {
-          env = HashMap.set(env, stmt.name, MutCell({ ref: { value: val } }));
+          env = HashMap.set(env, stmt.name, MutCell({ ref: { value: val, subscribers: [] } }));
         } else {
           env = HashMap.set(env, stmt.name, val);
         }

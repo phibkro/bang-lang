@@ -162,6 +162,9 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
     Match.tag("UseExpr", (e) =>
       Doc.hcat([Doc.text("use "), Doc.text(e.name), Doc.text(" = "), formatExpr(e.value)]),
     ),
+    Match.tag("OnExpr", (e) =>
+      Doc.hsep([Doc.text("on"), formatExpr(e.source), formatExpr(e.handler)]),
+    ),
     Match.exhaustive,
   );
 

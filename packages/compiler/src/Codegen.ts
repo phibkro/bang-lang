@@ -396,6 +396,11 @@ const emitExpr = (
       "UseExpr",
       (e) => `/* use ${e.name} = */ ${emitExpr(e.value, decls, mutNames, hoistedNames)}`,
     ),
+    Match.tag("OnExpr", (e) => {
+      const source = emitExpr(e.source, decls, mutNames, hoistedNames);
+      const handler = emitExpr(e.handler, decls, mutNames, hoistedNames);
+      return `subscribeToRef(${source}, ${handler})`;
+    }),
     Match.tag("MatchExpr", (e) => {
       const scrutinee = emitExpr(e.scrutinee, decls, mutNames, hoistedNames);
       const arms = e.arms;
@@ -581,6 +586,7 @@ const exprContainsMatch = (expr: Ast.Expr): boolean =>
     Match.tag("Force", (e) => exprContainsMatch(e.expr)),
     Match.tag("ComptimeExpr", (e) => exprContainsMatch(e.expr)),
     Match.tag("UseExpr", (e) => exprContainsMatch(e.value)),
+    Match.tag("OnExpr", (e) => exprContainsMatch(e.source) || exprContainsMatch(e.handler)),
     Match.orElse(() => false),
   );
 
@@ -613,6 +619,7 @@ const exprContainsDotMethod = (expr: Ast.Expr): boolean =>
     Match.tag("Force", (e) => exprContainsDotMethod(e.expr)),
     Match.tag("ComptimeExpr", (e) => exprContainsDotMethod(e.expr)),
     Match.tag("UseExpr", (e) => exprContainsDotMethod(e.value)),
+    Match.tag("OnExpr", (e) => exprContainsDotMethod(e.source) || exprContainsDotMethod(e.handler)),
     Match.orElse(() => false),
   );
 
@@ -643,6 +650,7 @@ const exprContainsDotHandle = (expr: Ast.Expr): boolean =>
     Match.tag("Force", (e) => exprContainsDotHandle(e.expr)),
     Match.tag("ComptimeExpr", (e) => exprContainsDotHandle(e.expr)),
     Match.tag("UseExpr", (e) => exprContainsDotHandle(e.value)),
+    Match.tag("OnExpr", (e) => exprContainsDotHandle(e.source) || exprContainsDotHandle(e.handler)),
     Match.orElse(() => false),
   );
 
