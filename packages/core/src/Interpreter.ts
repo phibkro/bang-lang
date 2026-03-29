@@ -15,6 +15,13 @@ import {
   type Value,
 } from "./Value.js";
 
+// Subscription registry: maps subscription ID → subscriber object
+let nextSubId = 0;
+const subscriptionRegistry = new Map<
+  number,
+  { active: boolean; fn: (newValue: Value) => Effect.Effect<void, EvalError> }
+>();
+
 const buildDottedName = (expr: Ast.Expr): Option.Option<string> =>
   Match.value(expr).pipe(
     Match.tag("Ident", (e) => Option.some(e.name)),
@@ -95,9 +102,9 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
           }
           const newValue = yield* evalExpr(e.right, env);
           cell.value.ref.value = newValue;
-          // Fire subscribers
+          // Fire active subscribers
           for (const sub of cell.value.ref.subscribers) {
-            yield* sub(newValue);
+            if (sub.active) yield* sub.fn(newValue);
           }
           return newValue;
         }
@@ -133,6 +140,17 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
         }
         if (obj._tag === "Tagged" && obj.fields.length > 0 && e.field === "unwrap") {
           return obj.fields[0];
+        }
+        // Subscription.abort: deactivate the subscriber
+        if (obj._tag === "Tagged" && obj.tag === "Subscription" && e.field === "abort") {
+          const idField = obj.fields[0];
+          if (idField._tag === "Num") {
+            const subscriber = subscriptionRegistry.get(idField.value);
+            if (subscriber) {
+              subscriber.active = false;
+            }
+          }
+          return Unit();
         }
         return yield* Effect.fail(
           new EvalError({
@@ -187,7 +205,10 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
                 ? yield* evalExpr(e.args[1], env)
                 : Closure({ params: ["_"], body: e.args[0], env });
             return yield* Effect.catchAll(evalExpr(e.func.object, env), (err) => {
-              if (err instanceof EvalError && (err.tag === errorTag || (err.tag === "" && err.message.startsWith(errorTag + ":")))) {
+              if (
+                err instanceof EvalError &&
+                (err.tag === errorTag || (err.tag === "" && err.message.startsWith(errorTag + ":")))
+              ) {
                 return applyValue(handler, [Str({ value: err.message })], e.span);
               }
               return Effect.fail(err);
@@ -209,7 +230,12 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
           if (allApplied.length >= func.arity) {
             return Tagged({ tag: func.tag, fields: allApplied, fieldNames: func.fieldNames });
           }
-          return Constructor({ tag: func.tag, arity: func.arity, applied: allApplied, fieldNames: func.fieldNames });
+          return Constructor({
+            tag: func.tag,
+            arity: func.arity,
+            applied: allApplied,
+            fieldNames: func.fieldNames,
+          });
         }
 
         if (func._tag !== "Closure")
@@ -273,11 +299,16 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
         }
         // Evaluate handler (should be a Closure)
         const handler = yield* evalExpr(e.handler, env);
-        // Register subscriber
-        const sub = (newValue: Value) => applyValue(handler, [newValue], e.span).pipe(Effect.asVoid);
-        sourceCell.value.ref.subscribers.push(sub);
-        // Return Unit (subscription is a side effect)
-        return Unit();
+        // Register subscriber with active flag
+        const subscriber = {
+          active: true,
+          fn: (newValue: Value) => applyValue(handler, [newValue], e.span).pipe(Effect.asVoid),
+        };
+        sourceCell.value.ref.subscribers.push(subscriber);
+        // Store in registry and return Subscription
+        const id = nextSubId++;
+        subscriptionRegistry.set(id, subscriber);
+        return Tagged({ tag: "Subscription", fields: [Num({ value: id })], fieldNames: ["_id"] });
       }),
     ),
     Match.exhaustive,
@@ -331,7 +362,12 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
               HashMap.set(
                 acc,
                 c.tag,
-                Constructor({ tag: c.tag, arity: c.fields.length, applied: [], fieldNames: c.fields.map((f) => f.name) }),
+                Constructor({
+                  tag: c.tag,
+                  arity: c.fields.length,
+                  applied: [],
+                  fieldNames: c.fields.map((f) => f.name),
+                }),
               ),
             ),
             Match.exhaustive,
@@ -340,11 +376,26 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
       ),
     ),
     Match.tag("NewtypeDecl", (s) =>
-      Effect.succeed(HashMap.set(env, s.name, Constructor({ tag: s.name, arity: 1, applied: [], fieldNames: [] }))),
+      Effect.succeed(
+        HashMap.set(
+          env,
+          s.name,
+          Constructor({ tag: s.name, arity: 1, applied: [], fieldNames: [] }),
+        ),
+      ),
     ),
     Match.tag("RecordTypeDecl", (s) =>
       Effect.succeed(
-        HashMap.set(env, s.name, Constructor({ tag: s.name, arity: s.fields.length, applied: [], fieldNames: s.fields.map((f) => f.name) })),
+        HashMap.set(
+          env,
+          s.name,
+          Constructor({
+            tag: s.name,
+            arity: s.fields.length,
+            applied: [],
+            fieldNames: s.fields.map((f) => f.name),
+          }),
+        ),
       ),
     ),
     Match.tag("Import", () => Effect.succeed(env)),
@@ -361,9 +412,18 @@ const applyValue = (
   if (func._tag === "Constructor") {
     const allApplied = [...func.applied, ...args];
     if (allApplied.length >= func.arity) {
-      return Effect.succeed(Tagged({ tag: func.tag, fields: allApplied, fieldNames: func.fieldNames }));
+      return Effect.succeed(
+        Tagged({ tag: func.tag, fields: allApplied, fieldNames: func.fieldNames }),
+      );
     }
-    return Effect.succeed(Constructor({ tag: func.tag, arity: func.arity, applied: allApplied, fieldNames: func.fieldNames }));
+    return Effect.succeed(
+      Constructor({
+        tag: func.tag,
+        arity: func.arity,
+        applied: allApplied,
+        fieldNames: func.fieldNames,
+      }),
+    );
   }
   return Effect.fail(new EvalError({ message: "Cannot apply non-function", span }));
 };

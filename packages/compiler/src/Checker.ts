@@ -353,9 +353,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     Match.tag("ComptimeExpr", (e) => validateExprScope(e.expr, scope)),
     Match.tag("UseExpr", (e) => validateExprScope(e.value, scope)),
     Match.tag("OnExpr", (e) =>
-      Effect.flatMap(validateExprScope(e.source, scope), () =>
-        validateExprScope(e.handler, scope),
-      ),
+      Effect.flatMap(validateExprScope(e.source, scope), () => validateExprScope(e.handler, scope)),
     ),
     Match.exhaustive,
   );
@@ -533,9 +531,7 @@ const collectOnEdges = (
 };
 
 /** Detect cycles in on-subscription graph via DFS. */
-const detectOnCycles = (
-  stmts: ReadonlyArray<Ast.Stmt>,
-): Effect.Effect<void, CompilerError> => {
+const detectOnCycles = (stmts: ReadonlyArray<Ast.Stmt>): Effect.Effect<void, CompilerError> => {
   const edges = collectOnEdges(stmts);
   // Build adjacency list: source -> targets
   const graph = new Map<string, string[]>();

@@ -398,10 +398,14 @@ const emitExpr = (
           Str: (s) => `"${s.value}"`,
           Bool: (b) => String(b.value),
           Unit: () => "undefined",
-          Closure: () => `/* comptime: cannot serialize closure */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
-          Tagged: () => `/* comptime: cannot serialize tagged */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
-          Constructor: () => `/* comptime: cannot serialize constructor */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
-          MutCell: () => `/* comptime: cannot serialize mutcell */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+          Closure: () =>
+            `/* comptime: cannot serialize closure */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+          Tagged: () =>
+            `/* comptime: cannot serialize tagged */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+          Constructor: () =>
+            `/* comptime: cannot serialize constructor */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
+          MutCell: () =>
+            `/* comptime: cannot serialize mutcell */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`,
         });
       } catch {
         return `/* comptime eval failed */ ${emitExpr(e.expr, decls, mutNames, hoistedNames)}`;

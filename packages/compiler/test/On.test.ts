@@ -77,6 +77,23 @@ describe("On — Push Subscriptions", () => {
     }),
   );
 
+  it.effect("on returns subscription, abort stops handler", () =>
+    Effect.gen(function* () {
+      const result = yield* evalSource(
+        `result = {
+          mut x = 0;
+          mut y = 0;
+          sub = !on x v -> { !y <- v; () };
+          !x <- 10;
+          !sub.abort;
+          !x <- 20;
+          y
+        }`,
+      );
+      expect(Value.toJS(result)).toBe(10);
+    }),
+  );
+
   // -------------------------------------------------------------------------
   // Checker
   // -------------------------------------------------------------------------
@@ -100,9 +117,7 @@ describe("On — Push Subscriptions", () => {
     Effect.gen(function* () {
       const result = yield* Effect.either(
         Effect.gen(function* () {
-          const tokens = yield* Lexer.tokenize(
-            "y = { mut a = 0; !on a v -> { !a <- v; () }; a }",
-          );
+          const tokens = yield* Lexer.tokenize("y = { mut a = 0; !on a v -> { !a <- v; () }; a }");
           const ast = yield* Parser.parse(tokens);
           return yield* Checker.check(ast);
         }),
@@ -120,9 +135,7 @@ describe("On — Push Subscriptions", () => {
 
   it.effect("formats on expression", () =>
     Effect.gen(function* () {
-      const formatted = yield* Formatter.formatSource(
-        "y = { mut x = 0; on x v -> { v } }",
-      );
+      const formatted = yield* Formatter.formatSource("y = { mut x = 0; on x v -> { v } }");
       expect(formatted).toContain("on x");
     }),
   );

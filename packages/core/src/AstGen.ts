@@ -129,16 +129,15 @@ const genLambda = (depth: number) =>
     );
 
 const genArm = (depth: number) =>
-  fc
-    .tuple(genPattern(0), fc.boolean(), genExpr(depth - 1), genExpr(depth - 1))
-    .map(([pat, hasGuard, guardExpr, body]) =>
+  fc.tuple(genPattern(0), fc.boolean(), genExpr(depth - 1), genExpr(depth - 1)).map(
+    ([pat, hasGuard, guardExpr, body]) =>
       new Ast.Arm({
         pattern: pat,
         guard: hasGuard ? Option.some(guardExpr) : Option.none(),
         body,
         span: s,
       }),
-    );
+  );
 
 const genMatchExpr = (depth: number) =>
   fc

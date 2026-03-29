@@ -256,7 +256,9 @@ const parseRecordTypeFields = (
     const [, s1] = yield* expect(s, "Delimiter", "{");
     const fields: Array<{ name: string; type: Ast.Type }> = [];
 
-    const collectFields = (st: ParseState): Effect.Effect<readonly [typeof fields, ParseState], CompilerError> =>
+    const collectFields = (
+      st: ParseState,
+    ): Effect.Effect<readonly [typeof fields, ParseState], CompilerError> =>
       Effect.gen(function* () {
         const isClose = yield* check(st, "Delimiter", "}");
         if (isClose) return [fields, st] as const;

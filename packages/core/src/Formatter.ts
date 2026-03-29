@@ -253,9 +253,7 @@ const formatTopLevelStmt = (stmt: Ast.Stmt): Doc.Doc<never> =>
         Doc.hcat([Doc.text(f.name), Doc.text(" : "), formatType(f.type)]),
       );
       const fieldList =
-        fields.length === 0
-          ? Doc.empty
-          : fields.reduce((a, b) => Doc.hcat([a, Doc.text(", "), b]));
+        fields.length === 0 ? Doc.empty : fields.reduce((a, b) => Doc.hcat([a, Doc.text(", "), b]));
       return Doc.hcat([
         Doc.text("type "),
         Doc.text(s.name),

@@ -25,7 +25,13 @@ export type Value = Data.TaggedEnum<{
     readonly fieldNames: ReadonlyArray<string>;
   };
   MutCell: {
-    readonly ref: { value: Value; subscribers: Array<(newValue: Value) => Effect.Effect<void, EvalError>> };
+    readonly ref: {
+      value: Value;
+      subscribers: Array<{
+        active: boolean;
+        fn: (newValue: Value) => Effect.Effect<void, EvalError>;
+      }>;
+    };
   };
 }>;
 
