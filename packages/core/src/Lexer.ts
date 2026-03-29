@@ -1,4 +1,4 @@
-import { Chunk, Effect, Option, Array as Arr } from "effect";
+import { Chunk, Effect, Option } from "effect";
 import type { CompilerError } from "./CompilerError.js";
 import { LexError } from "./CompilerError.js";
 import * as Span from "./Span.js";
@@ -123,11 +123,13 @@ type Recognizer = (s: ScanState) => Option.Option<readonly [Token, ScanState]>;
 
 const firstOf =
   (...recognizers: ReadonlyArray<Recognizer>): Recognizer =>
-  (s) =>
-    Arr.findFirst(
-      recognizers.map((r) => r(s)),
-      Option.isSome,
-    ).pipe(Option.flatten);
+  (s) => {
+    for (const r of recognizers) {
+      const result = r(s);
+      if (Option.isSome(result)) return result;
+    }
+    return Option.none();
+  };
 
 // ---------------------------------------------------------------------------
 // Character predicates

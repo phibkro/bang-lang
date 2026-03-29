@@ -1,5 +1,5 @@
 import { Array as Arr, Effect, HashMap, Match, Option } from "effect";
-import type * as Ast from "@bang/core/Ast";
+import * as Ast from "@bang/core/Ast";
 import type { CompilerError } from "@bang/core/CompilerError";
 import { CodegenError } from "@bang/core/CompilerError";
 import { Interpreter, Value as ValueMod } from "@bang/core";
@@ -59,15 +59,6 @@ const writerToString = (w: WriterState): string => w.lines.join("\n") + "\n";
 // ---------------------------------------------------------------------------
 // Helpers (pure, Match.tag for dispatch)
 // ---------------------------------------------------------------------------
-
-const buildDottedName = (expr: Ast.Expr): Option.Option<string> =>
-  Match.value(expr).pipe(
-    Match.tag("Ident", (e) => Option.some(e.name)),
-    Match.tag("DotAccess", (e) =>
-      Option.map(buildDottedName(e.object), (obj) => `${obj}.${e.field}`),
-    ),
-    Match.orElse(() => Option.none()),
-  );
 
 const countParams = (type: Ast.Type): number =>
   Match.value(type).pipe(
@@ -268,7 +259,7 @@ const emitExpr = (
           : e.name,
     ),
     Match.tag("DotAccess", (e) =>
-      Option.match(buildDottedName(e), {
+      Option.match(Ast.buildDottedName(e), {
         onNone: () => `${emitExpr(e.object, decls, mutNames, hoistedNames)}.${e.field}`,
         onSome: (name) =>
           Option.match(HashMap.get(decls, name), {
@@ -315,7 +306,7 @@ const emitExpr = (
 
       const funcCode = emitExpr(e.func, decls, mutNames, hoistedNames);
       // Check if the function is a declared wrapper (use comma-separated args)
-      const dottedName = buildDottedName(e.func);
+      const dottedName = Ast.buildDottedName(e.func);
       const isDeclared = Option.isSome(Option.flatMap(dottedName, (n) => HashMap.get(decls, n)));
       if (isDeclared) {
         const args = Arr.map(e.args, (a) => emitExpr(a, decls, mutNames, hoistedNames)).join(", ");
@@ -733,95 +724,54 @@ const emitStatement = (
 // Program generation
 // ---------------------------------------------------------------------------
 
-const exprContainsMatch = (expr: Ast.Expr): boolean =>
-  Match.value(expr).pipe(
-    Match.tag("MatchExpr", () => true),
-    Match.tag("BinaryExpr", (e) => exprContainsMatch(e.left) || exprContainsMatch(e.right)),
-    Match.tag("UnaryExpr", (e) => exprContainsMatch(e.expr)),
-    Match.tag(
-      "Block",
-      (e) => e.statements.some((s) => stmtContainsMatch(s)) || exprContainsMatch(e.expr),
-    ),
-    Match.tag("Lambda", (e) => exprContainsMatch(e.body)),
-    Match.tag("App", (e) => exprContainsMatch(e.func) || e.args.some(exprContainsMatch)),
-    Match.tag("Force", (e) => exprContainsMatch(e.expr)),
-    Match.tag("ComptimeExpr", (e) => exprContainsMatch(e.expr)),
-    Match.tag("UseExpr", (e) => exprContainsMatch(e.value)),
-    Match.tag("OnExpr", (e) => exprContainsMatch(e.source) || exprContainsMatch(e.handler)),
-    Match.orElse(() => false),
-  );
+const exprContains = (expr: Ast.Expr, pred: (e: Ast.Expr) => boolean): boolean => {
+  if (pred(expr)) return true;
+  switch (expr._tag) {
+    case "BinaryExpr":
+      return exprContains(expr.left, pred) || exprContains(expr.right, pred);
+    case "UnaryExpr":
+      return exprContains(expr.expr, pred);
+    case "Force":
+      return exprContains(expr.expr, pred);
+    case "App":
+      return exprContains(expr.func, pred) || expr.args.some((a) => exprContains(a, pred));
+    case "DotAccess":
+      return exprContains(expr.object, pred);
+    case "Block":
+      return expr.statements.some((s) => stmtContains(s, pred)) || exprContains(expr.expr, pred);
+    case "Lambda":
+      return exprContains(expr.body, pred);
+    case "MatchExpr":
+      return (
+        exprContains(expr.scrutinee, pred) || expr.arms.some((a) => exprContains(a.body, pred))
+      );
+    case "StringInterp":
+      return expr.parts.some((p) => p._tag === "InterpExpr" && exprContains(p.value, pred));
+    case "ComptimeExpr":
+      return exprContains(expr.expr, pred);
+    case "UseExpr":
+      return exprContains(expr.value, pred);
+    case "OnExpr":
+      return exprContains(expr.source, pred) || exprContains(expr.handler, pred);
+    default:
+      return false;
+  }
+};
 
-const stmtContainsMatch = (stmt: Ast.Stmt): boolean =>
-  Match.value(stmt).pipe(
-    Match.tag("Declaration", (s) => exprContainsMatch(s.value)),
-    Match.tag("ExprStatement", (s) => exprContainsMatch(s.expr)),
-    Match.tag("ForceStatement", (s) => exprContainsMatch(s.expr)),
-    Match.orElse(() => false),
-  );
+const stmtContains = (stmt: Ast.Stmt, pred: (e: Ast.Expr) => boolean): boolean => {
+  switch (stmt._tag) {
+    case "Declaration":
+      return exprContains(stmt.value, pred);
+    case "ForceStatement":
+      return exprContains(stmt.expr, pred);
+    case "ExprStatement":
+      return exprContains(stmt.expr, pred);
+    default:
+      return false;
+  }
+};
 
 const DOT_METHODS = new Set(["handle", "catch", "map", "tap"]);
-
-const exprContainsDotMethod = (expr: Ast.Expr): boolean =>
-  Match.value(expr).pipe(
-    Match.tag(
-      "App",
-      (e) =>
-        (e.func._tag === "DotAccess" && DOT_METHODS.has(e.func.field)) ||
-        exprContainsDotMethod(e.func) ||
-        e.args.some(exprContainsDotMethod),
-    ),
-    Match.tag("BinaryExpr", (e) => exprContainsDotMethod(e.left) || exprContainsDotMethod(e.right)),
-    Match.tag("UnaryExpr", (e) => exprContainsDotMethod(e.expr)),
-    Match.tag(
-      "Block",
-      (e) => e.statements.some((s) => stmtContainsDotMethod(s)) || exprContainsDotMethod(e.expr),
-    ),
-    Match.tag("Lambda", (e) => exprContainsDotMethod(e.body)),
-    Match.tag("Force", (e) => exprContainsDotMethod(e.expr)),
-    Match.tag("ComptimeExpr", (e) => exprContainsDotMethod(e.expr)),
-    Match.tag("UseExpr", (e) => exprContainsDotMethod(e.value)),
-    Match.tag("OnExpr", (e) => exprContainsDotMethod(e.source) || exprContainsDotMethod(e.handler)),
-    Match.orElse(() => false),
-  );
-
-const stmtContainsDotMethod = (stmt: Ast.Stmt): boolean =>
-  Match.value(stmt).pipe(
-    Match.tag("Declaration", (s) => exprContainsDotMethod(s.value)),
-    Match.tag("ExprStatement", (s) => exprContainsDotMethod(s.expr)),
-    Match.tag("ForceStatement", (s) => exprContainsDotMethod(s.expr)),
-    Match.orElse(() => false),
-  );
-
-const exprContainsDotHandle = (expr: Ast.Expr): boolean =>
-  Match.value(expr).pipe(
-    Match.tag(
-      "App",
-      (e) =>
-        (e.func._tag === "DotAccess" && e.func.field === "handle") ||
-        exprContainsDotHandle(e.func) ||
-        e.args.some(exprContainsDotHandle),
-    ),
-    Match.tag("BinaryExpr", (e) => exprContainsDotHandle(e.left) || exprContainsDotHandle(e.right)),
-    Match.tag("UnaryExpr", (e) => exprContainsDotHandle(e.expr)),
-    Match.tag(
-      "Block",
-      (e) => e.statements.some((s) => stmtContainsDotHandle(s)) || exprContainsDotHandle(e.expr),
-    ),
-    Match.tag("Lambda", (e) => exprContainsDotHandle(e.body)),
-    Match.tag("Force", (e) => exprContainsDotHandle(e.expr)),
-    Match.tag("ComptimeExpr", (e) => exprContainsDotHandle(e.expr)),
-    Match.tag("UseExpr", (e) => exprContainsDotHandle(e.value)),
-    Match.tag("OnExpr", (e) => exprContainsDotHandle(e.source) || exprContainsDotHandle(e.handler)),
-    Match.orElse(() => false),
-  );
-
-const stmtContainsDotHandle = (stmt: Ast.Stmt): boolean =>
-  Match.value(stmt).pipe(
-    Match.tag("Declaration", (s) => exprContainsDotHandle(s.value)),
-    Match.tag("ExprStatement", (s) => exprContainsDotHandle(s.expr)),
-    Match.tag("ForceStatement", (s) => exprContainsDotHandle(s.expr)),
-    Match.orElse(() => false),
-  );
 
 const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
   const decls = collectDeclaredNames(program.statements);
@@ -830,7 +780,9 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
     program.statements,
     (s) => s.node._tag === "TypeDecl" || s.node._tag === "NewtypeDecl",
   );
-  const hasMatch = Arr.some(program.statements, (s) => stmtContainsMatch(s.node));
+  const hasMatch = Arr.some(program.statements, (s) =>
+    stmtContains(s.node, (e) => e._tag === "MatchExpr"),
+  );
   const stmtHasMutExpr = (stmt: TypedAst.TypedStmt): boolean =>
     stmt.node._tag === "ForceStatement" &&
     stmt.node.expr._tag === "Force" &&
@@ -840,8 +792,18 @@ const generateProgram = (program: TypedAst.TypedProgram): CodegenOutput => {
     program.statements,
     (s) => (s.node._tag === "Declaration" && s.node.mutable) || stmtHasMutExpr(s),
   );
-  const hasDotMethod = Arr.some(program.statements, (s) => stmtContainsDotMethod(s.node));
-  const hasDotHandle = Arr.some(program.statements, (s) => stmtContainsDotHandle(s.node));
+  const hasDotMethod = Arr.some(program.statements, (s) =>
+    stmtContains(
+      s.node,
+      (e) => e._tag === "App" && e.func._tag === "DotAccess" && DOT_METHODS.has(e.func.field),
+    ),
+  );
+  const hasDotHandle = Arr.some(program.statements, (s) =>
+    stmtContains(
+      s.node,
+      (e) => e._tag === "App" && e.func._tag === "DotAccess" && e.func.field === "handle",
+    ),
+  );
   const needsEffectImport = HashMap.size(decls) > 0 || hasForce || hasMut || hasDotMethod;
   const needsDataImport = hasTypeDecl;
 

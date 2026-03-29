@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Match, Option, Schema } from "effect";
 import { Span } from "./Span.js";
 
 // ---------------------------------------------------------------------------
@@ -363,3 +363,16 @@ export type Stmt =
   | Export;
 
 export type Node = Program | Stmt | Expr | Type | InterpPart | Pattern | Constructor | Arm;
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
+export const buildDottedName = (expr: Expr): Option.Option<string> =>
+  Match.value(expr).pipe(
+    Match.tag("Ident", (e) => Option.some(e.name)),
+    Match.tag("DotAccess", (e) =>
+      Option.map(buildDottedName(e.object), (obj) => `${obj}.${e.field}`),
+    ),
+    Match.orElse(() => Option.none()),
+  );

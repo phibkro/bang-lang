@@ -23,19 +23,10 @@ type Scope = HashMap.HashMap<string, ScopeEntry>;
 // Helpers (pure, use Match.tag for dispatch)
 // ---------------------------------------------------------------------------
 
-const buildDottedName = (expr: Ast.Expr): Option.Option<string> =>
-  Match.value(expr).pipe(
-    Match.tag("Ident", (e) => Option.some(e.name)),
-    Match.tag("DotAccess", (e) =>
-      Option.map(buildDottedName(e.object), (obj) => `${obj}.${e.field}`),
-    ),
-    Match.orElse(() => Option.none()),
-  );
-
 const resolveCallableName = (expr: Ast.Expr): Option.Option<string> =>
   Match.value(expr).pipe(
     Match.tag("Ident", (e) => Option.some(e.name)),
-    Match.tag("DotAccess", (e) => buildDottedName(e)),
+    Match.tag("DotAccess", (e) => Ast.buildDottedName(e)),
     Match.tag("App", (e) => resolveCallableName(e.func)),
     Match.tag("Force", (e) => resolveCallableName(e.expr)),
     Match.orElse(() => Option.none()),
@@ -163,7 +154,7 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       }),
     ),
     Match.tag("DotAccess", (e) =>
-      Option.match(buildDottedName(e), {
+      Option.match(Ast.buildDottedName(e), {
         onNone: () => "signal" as const,
         onSome: (name) =>
           Option.match(lookupScope(scope, name), {
@@ -197,20 +188,8 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
       const exprClass = classifyExpr(e.expr, blockScope);
       return stmtHasEffect || exprClass === "effect" ? ("effect" as const) : ("signal" as const);
     }),
-    Match.tag("Lambda", (e) => {
-      // Create child scope with params bound as signal-typed
-      const paramScope = Arr.reduce(e.params, scope, (acc, p) =>
-        HashMap.set(acc, p, {
-          name: p,
-          type: Option.none(),
-          effectClass: "signal" as const,
-          mutable: false,
-        }),
-      );
-      // Lambda itself is always signal (it's a value); classify body for internal use
-      classifyExpr(e.body, paramScope);
-      return "signal" as const;
-    }),
+    // Lambda itself is always signal (it's a value)
+    Match.tag("Lambda", () => "signal" as const),
     Match.tag("StringInterp", () => "signal" as const),
     Match.tag("MatchExpr", () => "signal" as const),
     Match.tag("ComptimeExpr", (e) => classifyExpr(e.expr, scope)),
@@ -255,7 +234,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
           ),
     ),
     Match.tag("DotAccess", (e) =>
-      Option.match(buildDottedName(e), {
+      Option.match(Ast.buildDottedName(e), {
         onNone: () => validateExprScope(e.object, scope),
         onSome: (name) =>
           HashMap.has(scope, name)

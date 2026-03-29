@@ -22,15 +22,6 @@ const subscriptionRegistry = new Map<
   { active: boolean; fn: (newValue: Value) => Effect.Effect<void, EvalError> }
 >();
 
-const buildDottedName = (expr: Ast.Expr): Option.Option<string> =>
-  Match.value(expr).pipe(
-    Match.tag("Ident", (e) => Option.some(e.name)),
-    Match.tag("DotAccess", (e) =>
-      Option.map(buildDottedName(e.object), (obj) => `${obj}.${e.field}`),
-    ),
-    Match.orElse(() => Option.none()),
-  );
-
 const matchPattern = (pattern: Ast.Pattern, value: Value, env: Env): Option.Option<Env> =>
   Match.value(pattern).pipe(
     Match.tag("WildcardPattern", () => Option.some(env)),
@@ -139,7 +130,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
           }
         }
         // Try dotted name lookup in env (e.g. Console.log)
-        const dottedName = buildDottedName(e);
+        const dottedName = Ast.buildDottedName(e);
         if (Option.isSome(dottedName)) {
           const found = HashMap.get(env, dottedName.value);
           if (Option.isSome(found)) {
@@ -270,28 +261,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
           args.push(yield* evalExpr(arg, env));
         }
 
-        if (func._tag === "Constructor") {
-          const allApplied = [...func.applied, ...args];
-          if (allApplied.length >= func.arity) {
-            return Tagged({ tag: func.tag, fields: allApplied, fieldNames: func.fieldNames });
-          }
-          return Constructor({
-            tag: func.tag,
-            arity: func.arity,
-            applied: allApplied,
-            fieldNames: func.fieldNames,
-          });
-        }
-
-        if (func._tag !== "Closure")
-          return yield* Effect.fail(
-            new EvalError({
-              message: "Cannot apply non-function",
-              span: e.span,
-            }),
-          );
-
-        return yield* applyClosure(func, args, e.span);
+        return yield* applyValue(func, args, e.span);
       }),
     ),
     Match.tag("StringInterp", (e) =>
