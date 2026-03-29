@@ -34,7 +34,8 @@ Key concepts (see `docs/language-spec.md` for full v0.4 spec):
 ## Architecture
 
 Pipeline: `Lexer → Parser → Checker → Codegen`, each an Effect returning typed output.
-Phases composed in `Compiler.ts`. Each phase produces a distinct type (Token[] → UntypedAST → TypedAST → string).
+`@bang/core` owns AST + interpreter (ground truth). `@bang/compiler` depends on core for codegen.
+Interpreter defines semantics first. Compiler translates. If they disagree, interpreter wins.
 
 ## Patterns
 
@@ -85,7 +86,7 @@ Pragmatic (skip):
 
 ## Status
 
-v0.5.1 compiler complete. 263 tests, 200 random property test iterations.
+v0.5.1 compiler complete. 263 tests across 28 files, 200 random property test iterations.
 v0.5 adds: thunk axiom (!x <- 5, !match), dot methods (.handle/.catch/.map/.tap), use (resource CPS), on (push subscriptions + abort + cycle detection), nested patterns + guards, newtype + record type declarations, comptime.
 v0.5.1 adds: record field access (user.name), on .abort, use CPS protocol, handler namespacing, nested pattern codegen (arm grouping), braced multi-handler (.handle { A -> x, B -> y }), .match pipe (expr.match { arms }).
 Monorepo: `@bang/core` (interpreter domain), `@bang/compiler` (compilation pipeline), `@bang/cli`.
@@ -143,14 +144,35 @@ eval(ast) ≡ run(codegen(ast))     -- compiler correctness
 eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 ```
 
+## Interpreter Patterns
+
+- `<-` in BinaryExpr: do NOT evalExpr the left side (would unwrap MutCell). Extract Ident name directly.
+- `.handle` binds with `__handler_` prefix to avoid user name collisions
+- `use` CPS: Block handler detects `Force(UseExpr)`, builds continuation lambda from remaining stmts
+- `on` subscribers use `{ active: boolean, fn }` pattern. Subscription registry is module-level.
+- `genBinaryOperand` excludes Lambda/OnExpr to prevent flaky roundtrip property tests
+
 ## Known Issues
 
 - `tsc` reports errors in Ast.ts (Schema.suspend + OptionFromUndefinedOr Encoded/Type mismatch) and Parser.ts (block return type) — type-level only, no runtime impact. `skipLibCheck: true` masks these.
 - `@effect/printer` Doc.nest inside Doc.group triggers a flatten bug — blocks format flat-only for now.
-- ESLint has 44 warnings in Parser.ts (imperative patterns) — accepted per pragmatic style rules.
+- ESLint has ~140 warnings (imperative patterns in Parser/Interpreter/Codegen) — accepted per pragmatic style rules.
+
+## Known Codegen Limitations
+
+- Guards on grouped constructor arms (same outer tag) not yet codegen'd — interpreter handles them
+- Multi-field nested constructor patterns (`Pair a b`) only single-field supported in codegen
+- Subscription registry is module-level mutable state (leaks across test runs, works in practice)
+- `.abort` on Subscription is immediate side effect, not a returned thunk
 
 ## Specs & Plans
 
 - Language spec: `docs/language-spec.md`
 - Design specs and plans: `docs/superpowers/specs/` and `docs/superpowers/plans/`
 - Effect source: `~/Projects/Repos/effect` — read here instead of node_modules
+
+## Working with Subagents
+
+- Subagents often implement ahead of scope. Check git status before dispatching next task.
+- Pre-commit hook runs lint + full test suite. Commits that fail lint errors (not warnings) are rejected.
+- `npx vitest run` — canonical test command. 263 tests across 28 files.
