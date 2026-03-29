@@ -65,4 +65,25 @@ describe("use", () => {
       expect(result).toEqual(Value.Num({ value: 30 }));
     }),
   );
+
+  it.effect("use CPS — provider receives callback", () =>
+    Effect.gen(function* () {
+      const result = yield* evalSource(`
+        withResource = callback -> { callback "acquired" }
+        result = { !use x = withResource; x }
+      `);
+      expect(result).toEqual(Value.Str({ value: "acquired" }));
+    }),
+  );
+
+  it.effect("use CPS — multiple use bindings", () =>
+    Effect.gen(function* () {
+      const result = yield* evalSource(`
+        withA = cb -> { cb "a" }
+        withB = cb -> { cb "b" }
+        result = { !use x = withA; !use y = withB; x ++ y }
+      `);
+      expect(result).toEqual(Value.Str({ value: "ab" }));
+    }),
+  );
 });

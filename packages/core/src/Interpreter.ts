@@ -1,5 +1,5 @@
 import { Array as Arr, Effect, HashMap, Match, Option } from "effect";
-import type * as Ast from "./Ast.js";
+import * as Ast from "./Ast.js";
 import type * as Span from "./Span.js";
 import {
   Num,
@@ -122,6 +122,22 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
     Match.tag("Force", (e) => evalExpr(e.expr, env)),
     Match.tag("DotAccess", (e) =>
       Effect.gen(function* () {
+        // Try handler lookup: __handler_TypeName.field
+        if (e.object._tag === "Ident") {
+          const handlerKey = `__handler_${e.object.name}`;
+          const handler = HashMap.get(env, handlerKey);
+          if (Option.isSome(handler)) {
+            const h = handler.value;
+            if (h._tag === "Tagged" && h.fieldNames.length > 0) {
+              const idx = h.fieldNames.indexOf(e.field);
+              if (idx >= 0 && idx < h.fields.length) {
+                return h.fields[idx];
+              }
+            }
+            // If handler is a closure or other value, return it for single-op handlers
+            return h;
+          }
+        }
         // Try dotted name lookup in env (e.g. Console.log)
         const dottedName = buildDottedName(e);
         if (Option.isSome(dottedName)) {
@@ -163,7 +179,35 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
     Match.tag("Block", (e) =>
       Effect.gen(function* () {
         let blockEnv = env;
-        for (const stmt of e.statements) {
+        for (let i = 0; i < e.statements.length; i++) {
+          const stmt = e.statements[i];
+          // Detect !use pattern: ForceStatement wrapping Force wrapping UseExpr
+          if (
+            stmt._tag === "ForceStatement" &&
+            stmt.expr._tag === "Force" &&
+            stmt.expr.expr._tag === "UseExpr"
+          ) {
+            const useExpr = stmt.expr.expr;
+            const provider = yield* evalExpr(useExpr.value, blockEnv);
+            // CPS: if provider is callable, pass continuation as callback
+            if (provider._tag === "Closure" || provider._tag === "Constructor") {
+              const remaining = e.statements.slice(i + 1);
+              const contBlock = new Ast.Block({
+                statements: [...remaining],
+                expr: e.expr,
+                span: e.span,
+              });
+              const contLambda = new Ast.Lambda({
+                params: [useExpr.name],
+                body: contBlock,
+                span: e.span,
+              });
+              const callback = yield* evalExpr(contLambda, blockEnv);
+              return yield* applyValue(provider, [callback], e.span);
+            }
+            // Simple binding: provider is a plain value
+            blockEnv = HashMap.set(blockEnv, useExpr.name, provider);
+          }
           blockEnv = yield* evalStmt(stmt, blockEnv);
         }
         return yield* evalExpr(e.expr, blockEnv);
@@ -194,7 +238,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
           if (method === "handle" && e.args.length === 2) {
             const typeName = e.args[0]._tag === "Ident" ? e.args[0].name : "";
             const impl = yield* evalExpr(e.args[1], env);
-            const handledEnv = HashMap.set(env, typeName, impl);
+            const handledEnv = HashMap.set(env, `__handler_${typeName}`, impl);
             return yield* evalExpr(e.func.object, handledEnv);
           }
 

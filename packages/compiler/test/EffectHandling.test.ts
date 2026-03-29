@@ -75,23 +75,26 @@ describe("Dot methods — interpreter", () => {
     }),
   );
 
-  it.effect(".handle binds an implementation and makes it available", () =>
+  it.effect(".handle binds an implementation and makes it available via DotAccess", () =>
     Effect.gen(function* () {
-      // Test: a block that looks up Console in env and calls .log
-      // { !Console.log "hi" }.handle Console impl
-      // For interpreter: .handle re-evaluates the object with the handler bound
-      //
-      // Simpler test: { x }.handle via re-evaluation with x bound
-      // Let's test: { x }.handle where x is looked up from an ident provided by handle
-      //
-      // Actually: .handle(TypeName, impl) re-evaluates object with TypeName=impl in env
-      // Test: { MyService }.handle MyService 99
-      // Result: 99 (re-evaluates { MyService } with MyService=99 in env)
+      // .handle(TypeName, impl) re-evaluates object with __handler_TypeName=impl in env
+      // The handler is accessed via DotAccess: MyService.run resolves to the handler value
+      // Test: { MyService.run }.handle MyService (Tagged "MyService" with field "run" = 99)
+      const impl = Value.Tagged({
+        tag: "MyService",
+        fields: [Value.Num({ value: 99 })],
+        fieldNames: ["run"],
+      });
+      const implEnv = HashMap.set(emptyEnv, "myImpl", impl);
       const expr = new Ast.App({
         func: new Ast.DotAccess({
           object: new Ast.Block({
             statements: [],
-            expr: new Ast.Ident({ name: "MyService", span: s }),
+            expr: new Ast.DotAccess({
+              object: new Ast.Ident({ name: "MyService", span: s }),
+              field: "run",
+              span: s,
+            }),
             span: s,
           }),
           field: "handle",
@@ -99,11 +102,11 @@ describe("Dot methods — interpreter", () => {
         }),
         args: [
           new Ast.Ident({ name: "MyService", span: s }),
-          new Ast.IntLiteral({ value: 99, span: s }),
+          new Ast.Ident({ name: "myImpl", span: s }),
         ],
         span: s,
       });
-      const result = yield* Interpreter.evalExpr(expr, emptyEnv);
+      const result = yield* Interpreter.evalExpr(expr, implEnv);
       expect(result).toEqual(Value.Num({ value: 99 }));
     }),
   );
@@ -181,6 +184,44 @@ describe("Dot methods — interpreter", () => {
       });
       const result = yield* Interpreter.evalExpr(expr, env);
       expect(result).toEqual(Value.Num({ value: 42 }));
+    }),
+  );
+
+  it.effect(".handle does not collide with user binding of same name", () =>
+    Effect.gen(function* () {
+      // Define a user binding named "Console" and a handler for "Console"
+      // Both should coexist: the user binding is at "Console", the handler at "__handler_Console"
+      const userBinding = Value.Str({ value: "user-value" });
+      const handlerImpl = Value.Tagged({
+        tag: "Console",
+        fields: [Value.Str({ value: "handler-log" })],
+        fieldNames: ["log"],
+      });
+      // Env has Console as a user binding and myHandler as the impl to provide
+      const env = HashMap.set(
+        HashMap.set(
+          HashMap.set(emptyEnv, "Console", userBinding),
+          "myHandler",
+          handlerImpl,
+        ),
+        // Simulate what .handle would do — place handler at __handler_Console
+        "__handler_Console",
+        handlerImpl,
+      );
+
+      // User binding "Console" should still resolve to userBinding
+      const identExpr = new Ast.Ident({ name: "Console", span: s });
+      const identResult = yield* Interpreter.evalExpr(identExpr, env);
+      expect(identResult).toEqual(Value.Str({ value: "user-value" }));
+
+      // Handler lookup via DotAccess Console.log should resolve from __handler_Console
+      const dotExpr = new Ast.DotAccess({
+        object: new Ast.Ident({ name: "Console", span: s }),
+        field: "log",
+        span: s,
+      });
+      const dotResult = yield* Interpreter.evalExpr(dotExpr, env);
+      expect(dotResult).toEqual(Value.Str({ value: "handler-log" }));
     }),
   );
 });
