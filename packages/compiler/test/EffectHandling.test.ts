@@ -199,11 +199,7 @@ describe("Dot methods — interpreter", () => {
       });
       // Env has Console as a user binding and myHandler as the impl to provide
       const env = HashMap.set(
-        HashMap.set(
-          HashMap.set(emptyEnv, "Console", userBinding),
-          "myHandler",
-          handlerImpl,
-        ),
+        HashMap.set(HashMap.set(emptyEnv, "Console", userBinding), "myHandler", handlerImpl),
         // Simulate what .handle would do — place handler at __handler_Console
         "__handler_Console",
         handlerImpl,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { Interpreter, Lexer, Parser, Value } from "@bang/core";
+import { Compiler } from "@bang/compiler";
 
 const parseSource = (src: string) =>
   Effect.gen(function* () {
@@ -50,6 +51,19 @@ describe("Nested patterns", () => {
       );
       const result = yield* Interpreter.evalProgram(ast);
       expect(result).toEqual(Value.Num({ value: 99 }));
+    }),
+  );
+});
+
+describe("Nested pattern codegen", () => {
+  it.effect("codegen groups arms by outer tag with nested match", () =>
+    Effect.gen(function* () {
+      const result = yield* Compiler.compile(
+        "type Maybe a = Some a | None\ntype Result a b = Ok a | Err b\nx = match (Ok (Some 42)) { Ok (Some v) -> v, Ok None -> 0, Err e -> 0 }",
+      );
+      const okMatches = (result.code.match(/Match\.tag\("Ok"/g) || []).length;
+      expect(okMatches).toBe(1);
+      expect(result.code).toContain("Match.value");
     }),
   );
 });

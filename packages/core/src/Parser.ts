@@ -774,6 +774,25 @@ const parseDotAccess = (expr: Ast.Expr, s: ParseState): P<Ast.Expr> =>
     const isDot = yield* check(s, "Operator", ".");
     if (atEnd || !isDot) return [expr, s] as const;
     const [, s1] = yield* advance(s);
+
+    // .match { arms } desugars to MatchExpr(scrutinee=expr, arms)
+    const isMatch = yield* check(s1, "Keyword", "match");
+    if (isMatch) {
+      const [, s2] = yield* advance(s1); // consume "match"
+      const hasBrace = yield* check(s2, "Delimiter", "{");
+      if (hasBrace) {
+        const [, s3] = yield* expect(s2, "Delimiter", "{");
+        const [arms, s4] = yield* parseMatchArms(s3);
+        const [endTok, s5] = yield* expect(s4, "Delimiter", "}");
+        const matchExpr: Ast.Expr = new Ast.MatchExpr({
+          scrutinee: expr,
+          arms: [...arms],
+          span: Span.merge(expr.span, tokenSpan(endTok)),
+        });
+        return yield* parseDotAccess(matchExpr, s5);
+      }
+    }
+
     const [fieldTok, s2] = yield* expect(s1, "Ident");
     const dotExpr = new Ast.DotAccess({
       object: expr,
@@ -787,6 +806,37 @@ const parseApplication = (func: Ast.Expr, s: ParseState): P<Ast.Expr> =>
   Effect.gen(function* () {
     const atEnd = yield* isAtEnd(s);
     const t = yield* peek(s);
+
+    // Braced multi-handler: expr.handle { T1 -> impl1, T2 -> impl2 }
+    // Desugars to chained: App(DotAccess(App(DotAccess(expr, "handle"), [T1, impl1]), "handle"), [T2, impl2])
+    if (
+      !atEnd &&
+      func._tag === "DotAccess" &&
+      (func.field === "handle" || func.field === "catch") &&
+      tokenTag(t) === "Delimiter" &&
+      tokenValue(t) === "{"
+    ) {
+      const method = func.field;
+      const [, s1] = yield* advance(s); // consume {
+      const [pairs, s2] = yield* parseBracedHandlerPairs(s1);
+      const [endTok, s3] = yield* expect(s2, "Delimiter", "}");
+      // Build chained App(DotAccess(expr, method), [TypeIdent, impl]) nodes
+      let result: Ast.Expr = func.object;
+      for (const pair of pairs) {
+        const dotAccess = new Ast.DotAccess({
+          object: result,
+          field: method,
+          span: Span.merge(result.span, tokenSpan(endTok)),
+        });
+        result = new Ast.App({
+          func: dotAccess,
+          args: [pair.typeName, pair.impl],
+          span: Span.merge(result.span, pair.impl.span),
+        });
+      }
+      return [result, s3] as const;
+    }
+
     if (atEnd || !isArgStart(t)) return [func, s] as const;
 
     const collectArgs = (
@@ -809,6 +859,36 @@ const parseApplication = (func: Ast.Expr, s: ParseState): P<Ast.Expr> =>
       s2,
     ] as const;
   });
+
+const parseBracedHandlerPairs = (
+  s: ParseState,
+): P<ReadonlyArray<{ readonly typeName: Ast.Expr; readonly impl: Ast.Expr }>> => {
+  const go = (
+    pairs: ReadonlyArray<{ readonly typeName: Ast.Expr; readonly impl: Ast.Expr }>,
+    st: ParseState,
+  ): P<ReadonlyArray<{ readonly typeName: Ast.Expr; readonly impl: Ast.Expr }>> =>
+    Effect.gen(function* () {
+      const isClose = yield* check(st, "Delimiter", "}");
+      if (isClose) return [pairs, st] as const;
+      if (pairs.length > 0) {
+        const [, st2] = yield* expect(st, "Delimiter", ",");
+        st = st2;
+      }
+      // Check for trailing comma
+      const isCloseAfterComma = yield* check(st, "Delimiter", "}");
+      if (isCloseAfterComma) return [pairs, st] as const;
+      // Parse TypeIdent -> Expr
+      const [typeNameTok, st3] = yield* expect(st, "TypeIdent");
+      const typeName = new Ast.Ident({
+        name: tokenValue(typeNameTok),
+        span: tokenSpan(typeNameTok),
+      });
+      const [, st4] = yield* expect(st3, "Operator", "->");
+      const [impl, st5] = yield* parseExpr(st4);
+      return yield* go([...pairs, { typeName, impl }], st5);
+    });
+  return go([], s);
+};
 
 const isArgStart = (t: Token): boolean => {
   const tag = tokenTag(t);
@@ -986,6 +1066,25 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
 // Match expression
 // ---------------------------------------------------------------------------
 
+/** Parse comma-separated match arms (after opening `{` has been consumed, before `}`). */
+const parseMatchArms = (s: ParseState): P<ReadonlyArray<Ast.Arm>> => {
+  const collectArms = (arms: ReadonlyArray<Ast.Arm>, st: ParseState): P<ReadonlyArray<Ast.Arm>> =>
+    Effect.gen(function* () {
+      const isClose = yield* check(st, "Delimiter", "}");
+      if (isClose) return [arms, st] as const;
+      const [arm, st2] = yield* parseArm(st);
+      const newArms = [...arms, arm];
+      // Consume optional comma
+      const hasComma = yield* check(st2, "Delimiter", ",");
+      if (hasComma) {
+        const [, st3] = yield* advance(st2);
+        return yield* collectArms(newArms, st3);
+      }
+      return [newArms, st2] as const;
+    });
+  return collectArms([], s);
+};
+
 const parseMatch = (s: ParseState): P<Ast.MatchExpr> =>
   Effect.gen(function* () {
     const [startTok, s1] = yield* expect(s, "Keyword", "match");
@@ -993,23 +1092,7 @@ const parseMatch = (s: ParseState): P<Ast.MatchExpr> =>
     const [scrutinee, s2] = yield* parseExprPrec(s1, PREC_APP + 1);
     const [, s3] = yield* expect(s2, "Delimiter", "{");
 
-    // Parse arms separated by commas until `}`
-    const collectArms = (arms: ReadonlyArray<Ast.Arm>, st: ParseState): P<ReadonlyArray<Ast.Arm>> =>
-      Effect.gen(function* () {
-        const isClose = yield* check(st, "Delimiter", "}");
-        if (isClose) return [arms, st] as const;
-        const [arm, st2] = yield* parseArm(st);
-        const newArms = [...arms, arm];
-        // Consume optional comma
-        const hasComma = yield* check(st2, "Delimiter", ",");
-        if (hasComma) {
-          const [, st3] = yield* advance(st2);
-          return yield* collectArms(newArms, st3);
-        }
-        return [newArms, st2] as const;
-      });
-
-    const [arms, s4] = yield* collectArms([], s3);
+    const [arms, s4] = yield* parseMatchArms(s3);
     const [endTok, s5] = yield* expect(s4, "Delimiter", "}");
     return [
       new Ast.MatchExpr({

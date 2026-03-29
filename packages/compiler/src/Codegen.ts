@@ -434,76 +434,208 @@ const emitExpr = (
       );
       const hasConstructor = arms.some((a) => a.pattern._tag === "ConstructorPattern");
 
-      const parts: string[] = [];
-      for (let i = 0; i < arms.length; i++) {
-        const arm = arms[i];
-        const isLast = i === arms.length - 1;
-        const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
-        const hasGuard = Option.isSome(arm.guard);
-        const guardCode = hasGuard ? emitExpr(arm.guard.value, decls, mutNames, hoistedNames) : "";
-
-        if (isLast && (lastIsWildcard || lastIsBinding) && !hasGuard) {
-          // Last arm is wildcard or binding without guard — use orElse
-          if (lastIsBinding && arm.pattern._tag === "BindingPattern") {
-            parts.push(`Match.orElse((${arm.pattern.name}) => ${body})`);
-          } else {
-            parts.push(`Match.orElse(() => ${body})`);
-          }
-        } else if (arm.pattern._tag === "ConstructorPattern") {
-          const pat = arm.pattern;
-          if (hasGuard) {
-            // Guard present — use Match.when with tag check + guard
-            const bindings = pat.patterns.map((sub, idx) => {
-              if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
-              return `_${idx}`;
-            });
-            const destructure = pat.patterns.length > 0 ? `({ ${bindings.join(", ")} })` : `()`;
-            const tagCheck = `_v._tag === "${pat.tag}"`;
-            // Emit guard with bindings in scope via IIFE
-            const guardPred =
-              pat.patterns.length > 0 ? `(${destructure} => ${guardCode})(${`_v`})` : guardCode;
-            parts.push(
-              `Match.when((_v) => ${tagCheck} && ${guardPred}, ${destructure} => ${body})`,
-            );
-          } else if (pat.patterns.length === 0) {
-            parts.push(`Match.tag("${pat.tag}", () => ${body})`);
-          } else {
-            const bindings = pat.patterns.map((sub, idx) => {
-              if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
-              return `_${idx}`;
-            });
-            parts.push(`Match.tag("${pat.tag}", ({ ${bindings.join(", ")} }) => ${body})`);
-          }
-        } else if (arm.pattern._tag === "LiteralPattern") {
-          const litVal = emitExpr(arm.pattern.value, decls, mutNames, hoistedNames);
-          if (hasGuard) {
-            parts.push(`Match.when((v) => v === ${litVal} && ${guardCode}, () => ${body})`);
-          } else {
-            parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
-          }
-        } else if (arm.pattern._tag === "BindingPattern") {
-          if (hasGuard) {
-            parts.push(
-              `Match.when((${arm.pattern.name}) => ${guardCode}, (${arm.pattern.name}) => ${body})`,
-            );
-          } else {
-            // Non-last binding pattern — use Match.when that always matches
-            parts.push(`Match.when(() => true, (${arm.pattern.name}) => ${body})`);
-          }
-        } else {
-          // WildcardPattern
-          if (hasGuard) {
-            parts.push(`Match.when(() => ${guardCode}, () => ${body})`);
-          } else {
-            // WildcardPattern not at end — use Match.when that always matches
-            parts.push(`Match.when(() => true, () => ${body})`);
-          }
+      // Check if any constructor tag appears in multiple arms (needs grouping)
+      const ctorTagCounts = new Map<string, number>();
+      for (const arm of arms) {
+        if (arm.pattern._tag === "ConstructorPattern") {
+          ctorTagCounts.set(arm.pattern.tag, (ctorTagCounts.get(arm.pattern.tag) ?? 0) + 1);
         }
       }
+      const needsGrouping = Array.from(ctorTagCounts.values()).some((count) => count > 1);
 
-      // If all constructor patterns and no wildcard/binding at end, use exhaustive
-      if (hasConstructor && allConstructor && !lastIsWildcard && !lastIsBinding) {
-        parts.push("Match.exhaustive");
+      const parts: string[] = [];
+
+      if (needsGrouping) {
+        // Group constructor-pattern arms by outer tag, preserving order of first appearance
+        const tagOrder: string[] = [];
+        const tagGroups = new Map<string, ReadonlyArray<Ast.Arm>>();
+        const nonCtorArms: Array<{ arm: Ast.Arm; isLast: boolean }> = [];
+
+        for (let i = 0; i < arms.length; i++) {
+          const arm = arms[i];
+          const isLast = i === arms.length - 1;
+          if (arm.pattern._tag === "ConstructorPattern") {
+            const tag = arm.pattern.tag;
+            if (!tagGroups.has(tag)) {
+              tagOrder.push(tag);
+              tagGroups.set(tag, []);
+            }
+            tagGroups.set(tag, [...(tagGroups.get(tag) ?? []), arm]);
+          } else {
+            nonCtorArms.push({ arm, isLast });
+          }
+        }
+
+        // Emit grouped constructor arms
+        for (const tag of tagOrder) {
+          const group = tagGroups.get(tag) ?? [];
+          if (group.length === 1) {
+            // Single arm for this tag — emit flat Match.tag
+            const arm = group[0];
+            const pat = arm.pattern as Ast.ConstructorPattern;
+            const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
+            if (pat.patterns.length === 0) {
+              parts.push(`Match.tag("${pat.tag}", () => ${body})`);
+            } else {
+              const bindings = pat.patterns.map((sub, idx) => {
+                if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
+                return `_${idx}`;
+              });
+              parts.push(`Match.tag("${pat.tag}", ({ ${bindings.join(", ")} }) => ${body})`);
+            }
+          } else {
+            // Multiple arms for this tag — emit Match.tag with inner Match.value
+            const innerParts: string[] = [];
+            for (const arm of group) {
+              const pat = arm.pattern as Ast.ConstructorPattern;
+              const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
+              // Each sub-pattern of the outer constructor becomes a match on _0, _1, etc.
+              // For now, handle the common single-field case
+              if (pat.patterns.length === 1) {
+                const sub = pat.patterns[0];
+                if (sub._tag === "ConstructorPattern") {
+                  if (sub.patterns.length === 0) {
+                    innerParts.push(`Match.tag("${sub.tag}", () => ${body})`);
+                  } else {
+                    const subBindings = sub.patterns.map((s, idx) => {
+                      if (s._tag === "BindingPattern") return `_${idx}: ${s.name}`;
+                      return `_${idx}`;
+                    });
+                    innerParts.push(
+                      `Match.tag("${sub.tag}", ({ ${subBindings.join(", ")} }) => ${body})`,
+                    );
+                  }
+                } else if (sub._tag === "BindingPattern") {
+                  innerParts.push(`Match.orElse((${sub.name}) => ${body})`);
+                } else if (sub._tag === "WildcardPattern") {
+                  innerParts.push(`Match.orElse(() => ${body})`);
+                }
+              } else if (pat.patterns.length === 0) {
+                innerParts.push(`Match.orElse(() => ${body})`);
+              }
+            }
+            // Check if all inner parts are constructor-based (for exhaustive)
+            const allInnerCtor = group.every(
+              (arm) =>
+                (arm.pattern as Ast.ConstructorPattern).patterns.length === 1 &&
+                (arm.pattern as Ast.ConstructorPattern).patterns[0]._tag === "ConstructorPattern",
+            );
+            if (allInnerCtor) {
+              innerParts.push("Match.exhaustive");
+            }
+            const innerMatch = `Match.value(_0).pipe(\n      ${innerParts.join(",\n      ")}\n    )`;
+            parts.push(`Match.tag("${tag}", ({ _0 }) => ${innerMatch})`);
+          }
+        }
+
+        // Emit non-constructor arms (wildcard, binding, literal) at the end
+        for (const { arm, isLast } of nonCtorArms) {
+          const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
+          const hasGuard = Option.isSome(arm.guard);
+          const guardCode = hasGuard
+            ? emitExpr(arm.guard.value, decls, mutNames, hoistedNames)
+            : "";
+          if (
+            isLast &&
+            (arm.pattern._tag === "WildcardPattern" || arm.pattern._tag === "BindingPattern") &&
+            !hasGuard
+          ) {
+            if (arm.pattern._tag === "BindingPattern") {
+              parts.push(`Match.orElse((${arm.pattern.name}) => ${body})`);
+            } else {
+              parts.push(`Match.orElse(() => ${body})`);
+            }
+          } else if (arm.pattern._tag === "LiteralPattern") {
+            const litVal = emitExpr(arm.pattern.value, decls, mutNames, hoistedNames);
+            parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
+          } else if (arm.pattern._tag === "BindingPattern") {
+            if (hasGuard) {
+              parts.push(
+                `Match.when((${arm.pattern.name}) => ${guardCode}, (${arm.pattern.name}) => ${body})`,
+              );
+            } else {
+              parts.push(`Match.when(() => true, (${arm.pattern.name}) => ${body})`);
+            }
+          } else {
+            if (hasGuard) {
+              parts.push(`Match.when(() => ${guardCode}, () => ${body})`);
+            } else {
+              parts.push(`Match.when(() => true, () => ${body})`);
+            }
+          }
+        }
+
+        // Exhaustive if all constructor patterns and no wildcard/binding at end
+        if (hasConstructor && allConstructor && !lastIsWildcard && !lastIsBinding) {
+          parts.push("Match.exhaustive");
+        }
+      } else {
+        // No grouping needed — original code path
+        for (let i = 0; i < arms.length; i++) {
+          const arm = arms[i];
+          const isLast = i === arms.length - 1;
+          const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
+          const hasGuard = Option.isSome(arm.guard);
+          const guardCode = hasGuard
+            ? emitExpr(arm.guard.value, decls, mutNames, hoistedNames)
+            : "";
+
+          if (isLast && (lastIsWildcard || lastIsBinding) && !hasGuard) {
+            if (lastIsBinding && arm.pattern._tag === "BindingPattern") {
+              parts.push(`Match.orElse((${arm.pattern.name}) => ${body})`);
+            } else {
+              parts.push(`Match.orElse(() => ${body})`);
+            }
+          } else if (arm.pattern._tag === "ConstructorPattern") {
+            const pat = arm.pattern;
+            if (hasGuard) {
+              const bindings = pat.patterns.map((sub, idx) => {
+                if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
+                return `_${idx}`;
+              });
+              const destructure = pat.patterns.length > 0 ? `({ ${bindings.join(", ")} })` : `()`;
+              const tagCheck = `_v._tag === "${pat.tag}"`;
+              const guardPred =
+                pat.patterns.length > 0 ? `(${destructure} => ${guardCode})(${`_v`})` : guardCode;
+              parts.push(
+                `Match.when((_v) => ${tagCheck} && ${guardPred}, ${destructure} => ${body})`,
+              );
+            } else if (pat.patterns.length === 0) {
+              parts.push(`Match.tag("${pat.tag}", () => ${body})`);
+            } else {
+              const bindings = pat.patterns.map((sub, idx) => {
+                if (sub._tag === "BindingPattern") return `_${idx}: ${sub.name}`;
+                return `_${idx}`;
+              });
+              parts.push(`Match.tag("${pat.tag}", ({ ${bindings.join(", ")} }) => ${body})`);
+            }
+          } else if (arm.pattern._tag === "LiteralPattern") {
+            const litVal = emitExpr(arm.pattern.value, decls, mutNames, hoistedNames);
+            if (hasGuard) {
+              parts.push(`Match.when((v) => v === ${litVal} && ${guardCode}, () => ${body})`);
+            } else {
+              parts.push(`Match.when((v) => v === ${litVal}, () => ${body})`);
+            }
+          } else if (arm.pattern._tag === "BindingPattern") {
+            if (hasGuard) {
+              parts.push(
+                `Match.when((${arm.pattern.name}) => ${guardCode}, (${arm.pattern.name}) => ${body})`,
+              );
+            } else {
+              parts.push(`Match.when(() => true, (${arm.pattern.name}) => ${body})`);
+            }
+          } else {
+            if (hasGuard) {
+              parts.push(`Match.when(() => ${guardCode}, () => ${body})`);
+            } else {
+              parts.push(`Match.when(() => true, () => ${body})`);
+            }
+          }
+        }
+
+        if (hasConstructor && allConstructor && !lastIsWildcard && !lastIsBinding) {
+          parts.push("Match.exhaustive");
+        }
       }
 
       return `Match.value(${scrutinee}).pipe(\n  ${parts.join(",\n  ")}\n)`;
