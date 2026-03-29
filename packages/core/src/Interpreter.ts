@@ -125,6 +125,12 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
         }
         // Evaluate object and try field access on Tagged values
         const obj = yield* evalExpr(e.object, env);
+        if (obj._tag === "Tagged" && obj.fieldNames.length > 0) {
+          const idx = obj.fieldNames.indexOf(e.field);
+          if (idx >= 0 && idx < obj.fields.length) {
+            return obj.fields[idx];
+          }
+        }
         if (obj._tag === "Tagged" && obj.fields.length > 0 && e.field === "unwrap") {
           return obj.fields[0];
         }
@@ -201,9 +207,9 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
         if (func._tag === "Constructor") {
           const allApplied = [...func.applied, ...args];
           if (allApplied.length >= func.arity) {
-            return Tagged({ tag: func.tag, fields: allApplied });
+            return Tagged({ tag: func.tag, fields: allApplied, fieldNames: func.fieldNames });
           }
-          return Constructor({ tag: func.tag, arity: func.arity, applied: allApplied });
+          return Constructor({ tag: func.tag, arity: func.arity, applied: allApplied, fieldNames: func.fieldNames });
         }
 
         if (func._tag !== "Closure")
@@ -312,20 +318,20 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
         Arr.reduce(s.constructors, env, (acc, ctor) =>
           Match.value(ctor).pipe(
             Match.tag("NullaryConstructor", (c) =>
-              HashMap.set(acc, c.tag, Tagged({ tag: c.tag, fields: [] })),
+              HashMap.set(acc, c.tag, Tagged({ tag: c.tag, fields: [], fieldNames: [] })),
             ),
             Match.tag("PositionalConstructor", (c) =>
               HashMap.set(
                 acc,
                 c.tag,
-                Constructor({ tag: c.tag, arity: c.fields.length, applied: [] }),
+                Constructor({ tag: c.tag, arity: c.fields.length, applied: [], fieldNames: [] }),
               ),
             ),
             Match.tag("NamedConstructor", (c) =>
               HashMap.set(
                 acc,
                 c.tag,
-                Constructor({ tag: c.tag, arity: c.fields.length, applied: [] }),
+                Constructor({ tag: c.tag, arity: c.fields.length, applied: [], fieldNames: c.fields.map((f) => f.name) }),
               ),
             ),
             Match.exhaustive,
@@ -334,11 +340,11 @@ const evalStmt = (stmt: Ast.Stmt, env: Env): Effect.Effect<Env, EvalError> =>
       ),
     ),
     Match.tag("NewtypeDecl", (s) =>
-      Effect.succeed(HashMap.set(env, s.name, Constructor({ tag: s.name, arity: 1, applied: [] }))),
+      Effect.succeed(HashMap.set(env, s.name, Constructor({ tag: s.name, arity: 1, applied: [], fieldNames: [] }))),
     ),
     Match.tag("RecordTypeDecl", (s) =>
       Effect.succeed(
-        HashMap.set(env, s.name, Constructor({ tag: s.name, arity: s.fields.length, applied: [] })),
+        HashMap.set(env, s.name, Constructor({ tag: s.name, arity: s.fields.length, applied: [], fieldNames: s.fields.map((f) => f.name) })),
       ),
     ),
     Match.tag("Import", () => Effect.succeed(env)),
@@ -355,9 +361,9 @@ const applyValue = (
   if (func._tag === "Constructor") {
     const allApplied = [...func.applied, ...args];
     if (allApplied.length >= func.arity) {
-      return Effect.succeed(Tagged({ tag: func.tag, fields: allApplied }));
+      return Effect.succeed(Tagged({ tag: func.tag, fields: allApplied, fieldNames: func.fieldNames }));
     }
-    return Effect.succeed(Constructor({ tag: func.tag, arity: func.arity, applied: allApplied }));
+    return Effect.succeed(Constructor({ tag: func.tag, arity: func.arity, applied: allApplied, fieldNames: func.fieldNames }));
   }
   return Effect.fail(new EvalError({ message: "Cannot apply non-function", span }));
 };

@@ -16,11 +16,13 @@ export type Value = Data.TaggedEnum<{
   Tagged: {
     readonly tag: string;
     readonly fields: ReadonlyArray<Value>;
+    readonly fieldNames: ReadonlyArray<string>;
   };
   Constructor: {
     readonly tag: string;
     readonly arity: number;
     readonly applied: ReadonlyArray<Value>;
+    readonly fieldNames: ReadonlyArray<string>;
   };
   MutCell: {
     readonly ref: { value: Value; subscribers: Array<(newValue: Value) => Effect.Effect<void, EvalError>> };
@@ -48,7 +50,8 @@ export const toJS = (v: Value): unknown =>
     Tagged: (t) => {
       const fields: Record<string, unknown> = { _tag: t.tag };
       t.fields.forEach((f, i) => {
-        fields[String(i)] = toJS(f);
+        const key = i < t.fieldNames.length ? t.fieldNames[i] : String(i);
+        fields[key] = toJS(f);
       });
       return fields;
     },

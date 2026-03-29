@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Interpreter, Lexer, Parser, Formatter } from "@bang/core";
+import { Interpreter, Lexer, Parser, Formatter, Value } from "@bang/core";
 
 const parse = (source: string) =>
   Effect.gen(function* () {
@@ -70,6 +70,32 @@ x = User "alice" 30`;
       if (result._tag !== "Tagged") throw new Error("unreachable");
       expect(result.tag).toBe("User");
       expect(result.fields.length).toBe(2);
+    }),
+  );
+
+  it.effect("accesses record field by name", () =>
+    Effect.gen(function* () {
+      const source = [
+        "type User = { name: String, age: Int }",
+        'u = (User "alice" 30)',
+        "!u.name",
+      ].join("\n");
+      const ast = yield* parse(source);
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Str({ value: "alice" }));
+    }),
+  );
+
+  it.effect("accesses second record field", () =>
+    Effect.gen(function* () {
+      const source = [
+        "type User = { name: String, age: Int }",
+        'u = (User "alice" 30)',
+        "!u.age",
+      ].join("\n");
+      const ast = yield* parse(source);
+      const result = yield* Interpreter.evalProgram(ast);
+      expect(result).toEqual(Value.Num({ value: 30 }));
     }),
   );
 
