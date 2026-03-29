@@ -207,6 +207,7 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
             }
             // Simple binding: provider is a plain value
             blockEnv = HashMap.set(blockEnv, useExpr.name, provider);
+            continue; // skip evalStmt — already bound
           }
           blockEnv = yield* evalStmt(stmt, blockEnv);
         }

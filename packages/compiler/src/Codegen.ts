@@ -471,6 +471,8 @@ const emitExpr = (
           const group = tagGroups.get(tag) ?? [];
           if (group.length === 1) {
             // Single arm for this tag — emit flat Match.tag
+            // NOTE: guards on grouped constructor arms are not yet supported in codegen.
+            // The interpreter handles them correctly. This is a known v0.5.1 limitation.
             const arm = group[0];
             const pat = arm.pattern as Ast.ConstructorPattern;
             const body = emitExpr(arm.body, decls, mutNames, hoistedNames);
