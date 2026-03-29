@@ -85,9 +85,10 @@ Pragmatic (skip):
 
 ## Status
 
-v0.5 compiler complete. 250 tests, 200 random property test iterations.
-v0.5 adds: thunk axiom alignment (!x <- 5, !match), dot methods (.handle/.catch/.map/.tap), use (resource binding), on (push subscriptions + cycle detection), nested patterns + guards, newtype + record type declarations, comptime expressions.
-Monorepo split: `@bang/core` (interpreter domain), `@bang/compiler` (compilation pipeline), `@bang/cli`.
+v0.5.1 compiler complete. 263 tests, 200 random property test iterations.
+v0.5 adds: thunk axiom (!x <- 5, !match), dot methods (.handle/.catch/.map/.tap), use (resource CPS), on (push subscriptions + abort + cycle detection), nested patterns + guards, newtype + record type declarations, comptime.
+v0.5.1 adds: record field access (user.name), on .abort, use CPS protocol, handler namespacing, nested pattern codegen (arm grouping), braced multi-handler (.handle { A -> x, B -> y }), .match pipe (expr.match { arms }).
+Monorepo: `@bang/core` (interpreter domain), `@bang/compiler` (compilation pipeline), `@bang/cli`.
 Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)` — covers parser + formatter + interpreter.
 
 ## Design Process
