@@ -4,17 +4,18 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (interpreter domain), `@ban
 
 ## Commands
 
+- `pnpm install` — install dependencies (first-time setup)
 - `vp check --fix` — format + Oxlint (auto-fix)
 - `vp run lint` — ESLint with Effect/functional rules (auto-fix)
 - `vp run check` — tsc + ESLint (full verification)
-- `npx vitest run` — run all tests (200 tests, use this for accurate counts)
+- `npx vitest run` — run all tests (263 tests, use this for accurate counts)
 - `bang compile examples/hello.bang` — compile .bang to .ts
 - `bang fmt <file.bang>` — format in place
 - `bang run <file.bang>` — compile and execute
 
 ## Language Design
 
-Key concepts (see `docs/language-spec.md` for full v0.4 spec):
+Key concepts (see `docs/language-spec.md` for full v0.5 spec):
 
 - **Pull model**: Every binding is a lazy thunk. `!` is the single site where descriptions become reality.
 - `Effect A E R` — A=value, E=error effects, R=dependency effects. Both E and R are algebraic effects.
@@ -29,7 +30,7 @@ Key concepts (see `docs/language-spec.md` for full v0.4 spec):
 - Type variables are always lowercase (`a`, `b`). Concrete types uppercase (`Int`, `Maybe`).
 - `[1, 2, 3]` is Array (JS array). `List a` (Cons/Nil) is a separate ADT.
 - `!` binds loosest (except `<-`) — forces everything to the right.
-- Keywords (18): `mut type declare from import export match not and or xor if true false transaction gen on use`
+- Keywords (19): `mut type declare from import export match not and or xor if true false transaction gen on use comptime`
 
 ## Architecture
 
@@ -89,7 +90,6 @@ Pragmatic (skip):
 v0.5.1 compiler complete. 263 tests across 28 files, 200 random property test iterations.
 v0.5 adds: thunk axiom (!x <- 5, !match), dot methods (.handle/.catch/.map/.tap), use (resource CPS), on (push subscriptions + abort + cycle detection), nested patterns + guards, newtype + record type declarations, comptime.
 v0.5.1 adds: record field access (user.name), on .abort, use CPS protocol, handler namespacing, nested pattern codegen (arm grouping), braced multi-handler (.handle { A -> x, B -> y }), .match pipe (expr.match { arms }).
-Monorepo: `@bang/core` (interpreter domain), `@bang/compiler` (compilation pipeline), `@bang/cli`.
 Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)` — covers parser + formatter + interpreter.
 
 ## Design Process
