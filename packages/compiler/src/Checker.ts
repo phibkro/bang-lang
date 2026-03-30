@@ -4,6 +4,9 @@ import type { CompilerError } from "@bang/core/CompilerError";
 import { CheckError } from "@bang/core/CompilerError";
 import type { InferType } from "@bang/core/InferType";
 import { TArrow, TCon } from "@bang/core/InferType";
+import { inferProgram } from "@bang/core/Infer";
+import type { ProgramResult } from "@bang/core/Infer";
+import { apply } from "@bang/core/Unify";
 import * as Span from "@bang/core/Span";
 import type * as TypedAst from "./TypedAst.js";
 import { annotate } from "./TypedAst.js";
@@ -350,20 +353,29 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
 // Check statement (returns Effect<TypedStmt, CompilerError>)
 // ---------------------------------------------------------------------------
 
+/** Look up the inferred type for a name, falling back to unknownType. */
+const inferredTypeFor = (name: string, inferred: ProgramResult | undefined): InferType => {
+  if (inferred === undefined) return unknownType;
+  const scheme = HashMap.get(inferred.env, name);
+  if (Option.isNone(scheme)) return unknownType;
+  return apply(inferred.subst, scheme.value.type);
+};
+
 const checkStmt = (
   stmt: Ast.Stmt,
   scope: Scope,
+  inferred: ProgramResult | undefined,
 ): Effect.Effect<TypedAst.TypedStmt, CompilerError> =>
   Match.value(stmt).pipe(
     Match.tag("Declare", (s) =>
-      Effect.succeed(annotate(s, { type: astTypeToInferSimple(s.typeAnnotation), effectClass: "signal" as const })),
+      Effect.succeed(annotate(s, { type: inferredTypeFor(s.name, inferred), effectClass: "signal" as const })),
     ),
     Match.tag("Declaration", (s) =>
       Effect.gen(function* () {
         yield* validateExprScope(s.value, scope);
         const effectClass = classifyExpr(s.value, scope);
         return annotate(s, {
-          type: Option.match(s.typeAnnotation, { onNone: () => unknownType, onSome: astTypeToInferSimple }),
+          type: inferredTypeFor(s.name, inferred),
           effectClass,
         });
       }),
@@ -565,7 +577,12 @@ const detectOnCycles = (stmts: ReadonlyArray<Ast.Stmt>): Effect.Effect<void, Com
 const checkProgram = (program: Ast.Program): Effect.Effect<TypedAst.TypedProgram, CompilerError> =>
   Effect.gen(function* () {
     const scope = buildScope(program.statements, HashMap.empty());
-    const statements = yield* Effect.forEach(program.statements, (stmt) => checkStmt(stmt, scope));
+    // Run HM type inference (best-effort — errors are non-fatal for the checker)
+    const inferred = yield* inferProgram(program).pipe(
+      Effect.map((r) => r as ProgramResult | undefined),
+      Effect.catchAll(() => Effect.succeed(undefined as ProgramResult | undefined)),
+    );
+    const statements = yield* Effect.forEach(program.statements, (stmt) => checkStmt(stmt, scope, inferred));
     // Post-pass: detect subscription cycles
     yield* detectOnCycles(program.statements);
     return { _tag: "Program" as const, statements: [...statements], span: program.span };

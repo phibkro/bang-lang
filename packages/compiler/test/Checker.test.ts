@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Lexer, Parser } from "@bang/core";
+import { Lexer, Parser, InferType } from "@bang/core";
 import { Checker } from "@bang/compiler";
 
 const check = (source: string) =>
@@ -52,6 +52,30 @@ fetch "url"`).pipe(Effect.either);
       const typed = yield* check('greeting = "hello"');
       const decl = typed.statements[0] as any;
       expect(decl.annotation.effectClass).toBe("signal");
+    }),
+  );
+
+  it.effect("annotates declaration with inferred type", () =>
+    Effect.gen(function* () {
+      const typed = yield* check("x = 42");
+      const decl = typed.statements[0] as any;
+      expect(decl.annotation.type).toEqual(InferType.tInt);
+    }),
+  );
+
+  it.effect("annotates string declaration with inferred type", () =>
+    Effect.gen(function* () {
+      const typed = yield* check('x = "hello"');
+      const decl = typed.statements[0] as any;
+      expect(decl.annotation.type).toEqual(InferType.tString);
+    }),
+  );
+
+  it.effect("annotates declared type from inference", () =>
+    Effect.gen(function* () {
+      const typed = yield* check("declare log : String -> Unit");
+      const decl = typed.statements[0] as any;
+      expect(decl.annotation.type._tag).toBe("TArrow");
     }),
   );
 });
