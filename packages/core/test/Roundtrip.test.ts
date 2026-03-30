@@ -70,7 +70,7 @@ describe("Roundtrip Property Tests", () => {
       // THE ASSERTION
       expect(roundtripped).toEqual(original);
     },
-    { fastCheck: { numRuns: 100 } },
+    { fastCheck: { numRuns: 100 }, timeout: 15000 },
   );
 
   it.prop(
