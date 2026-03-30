@@ -165,10 +165,7 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 
 ## Known Inference Limitations
 
-- `Infer.ts` uses module-level mutable counter (`nextId`) — reset in `inferProgram`, not safe for concurrent use
-- `inferProgram` re-infers ExprStatement/ForceStatement expressions twice (wasteful, add lastType to StmtResult)
-- `generalize` doesn't apply subst to env before computing free vars — can under-generalize in nested scopes
-- Constructor pattern inference doesn't thread substitution — multi-field shared type vars may not unify correctly
+- `Infer.ts` uses module-level mutable counter (`nextId`) — reset in `inferProgram`, not safe for concurrent use. Documented in code.
 - Checker still owns effect classification and cycle detection; TypedAst annotations use TCon("Unknown") placeholders
 
 ## Known Codegen Limitations

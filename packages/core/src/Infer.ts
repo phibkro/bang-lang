@@ -22,6 +22,10 @@ type FieldInfo = HashMap.HashMap<string, ReadonlyArray<{ name: string; type: Inf
 
 // ---------------------------------------------------------------------------
 // Fresh variable counter (pragmatic mutable — per codebase style)
+//
+// INVARIANT: resetFreshCounter() must be called at the start of each
+// inferProgram invocation. Not safe for concurrent use. Fresh vars use
+// positive IDs; astTypeToInfer uses negative IDs to avoid collision.
 // ---------------------------------------------------------------------------
 
 let nextId = 0;
@@ -49,11 +53,13 @@ interface StmtResult {
   readonly env: TypeEnv;
   readonly subst: Substitution;
   readonly fields: FieldInfo;
+  readonly lastType?: InferType;  // Type of the binding/expression, if any
 }
 
 interface PatternResult {
   readonly type: InferType;
   readonly env: TypeEnv;
+  readonly subst: Substitution;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,11 +83,11 @@ const freeVars = (t: InferType): Set<number> => {
   }
 };
 
-const freeVarsEnv = (env: TypeEnv): Set<number> => {
+const freeVarsEnv = (env: TypeEnv, subst: Substitution): Set<number> => {
   const result = new Set<number>();
   for (const [, scheme] of env) {
     const bound = new Set(scheme.vars);
-    for (const v of freeVars(scheme.type)) {
+    for (const v of freeVars(apply(subst, scheme.type))) {
       if (!bound.has(v)) result.add(v);
     }
   }
@@ -126,7 +132,7 @@ const applySchemeSubst = (
 
 const generalize = (env: TypeEnv, type: InferType, subst: Substitution): Scheme => {
   const resolved = apply(subst, type);
-  const envFree = freeVarsEnv(env);
+  const envFree = freeVarsEnv(env, subst);
   const typeFree = freeVars(resolved);
   const vars: Array<number> = [];
   for (const v of typeFree) {
@@ -359,8 +365,8 @@ const infer = (
         const resultVar = freshVar();
 
         for (const arm of e.arms) {
-          const patResult = yield* inferPattern(arm.pattern, env);
-          currentSubst = yield* unify(patResult.type, scrutResult.type, currentSubst, arm.span);
+          const patResult = yield* inferPattern(arm.pattern, env, currentSubst);
+          currentSubst = yield* unify(patResult.type, scrutResult.type, patResult.subst, arm.span);
 
           let armEnv = env;
           for (const [name, scheme] of patResult.env) {
@@ -465,21 +471,24 @@ const getBaseCtorName = (t: InferType): string | undefined => {
 const inferPattern = (
   pattern: Pattern,
   env: TypeEnv,
+  subst: Substitution,
 ): Effect.Effect<PatternResult, TypeError> =>
   Match.value(pattern).pipe(
     Match.tag("WildcardPattern", () =>
       Effect.succeed({
-        type: freshVar(),
+        type: freshVar() as InferType,
         env: HashMap.empty<string, Scheme>(),
-      } as PatternResult),
+        subst,
+      }),
     ),
 
     Match.tag("BindingPattern", (p) => {
       const tv = freshVar();
       return Effect.succeed({
-        type: tv,
+        type: tv as InferType,
         env: HashMap.make([p.name, { vars: [], type: tv } as Scheme]),
-      } as PatternResult);
+        subst,
+      });
     }),
 
     Match.tag("ConstructorPattern", (p) =>
@@ -501,32 +510,32 @@ const inferPattern = (
         }
 
         let bindings: TypeEnv = HashMap.empty();
+        let currentSubst = subst;
         for (let i = 0; i < p.patterns.length; i++) {
           const subPat = p.patterns[i] as Pattern;
-          const subResult = yield* inferPattern(subPat, env);
-          // Bind sub-pattern names to the constructor's field type (not the unconstrained fresh var)
+          const subResult = yield* inferPattern(subPat, env, currentSubst);
+          currentSubst = subResult.subst;
+          // Unify sub-pattern type with constructor's field type
           const fieldType = i < paramTypes.length ? paramTypes[i] as InferType : subResult.type;
+          currentSubst = yield* unify(subResult.type, fieldType, currentSubst, p.span);
+          // Bind with the resolved field type
           for (const [name] of subResult.env) {
-            bindings = HashMap.set(bindings, name, { vars: [], type: fieldType } as Scheme);
+            bindings = HashMap.set(bindings, name, { vars: [], type: apply(currentSubst, fieldType) } as Scheme);
           }
         }
 
-        return { type: current, env: bindings } as PatternResult;
+        return { type: apply(currentSubst, current), env: bindings, subst: currentSubst };
       }),
     ),
 
     Match.tag("LiteralPattern", (p) =>
       Effect.gen(function* () {
-        const result = yield* infer(
-          p.value,
-          env,
-          HashMap.empty() as Substitution,
-          HashMap.empty() as FieldInfo,
-        );
+        const result = yield* infer(p.value, env, subst, HashMap.empty() as FieldInfo);
         return {
           type: result.type,
           env: HashMap.empty<string, Scheme>(),
-        } as PatternResult;
+          subst: result.subst,
+        };
       }),
     ),
 
@@ -561,6 +570,7 @@ const inferStmt = (
           env: HashMap.set(env, s.name, scheme),
           subst: currentSubst,
           fields,
+          lastType: apply(currentSubst, inferredType),
         } as StmtResult;
       }),
     ),
@@ -587,6 +597,7 @@ const inferStmt = (
             env: HashMap.set(env, useExpr.name, scheme),
             subst: valResult.subst,
             fields,
+            lastType: apply(valResult.subst, valResult.type),
           } as StmtResult;
         }
 
@@ -598,18 +609,19 @@ const inferStmt = (
             env: HashMap.set(env, useExpr.name, scheme),
             subst: valResult.subst,
             fields,
+            lastType: apply(valResult.subst, valResult.type),
           } as StmtResult;
         }
 
         const result = yield* infer(s.expr, env, subst, fields);
-        return { env, subst: result.subst, fields } as StmtResult;
+        return { env, subst: result.subst, fields, lastType: apply(result.subst, result.type) } as StmtResult;
       }),
     ),
 
     Match.tag("ExprStatement", (s) =>
       Effect.gen(function* () {
         const result = yield* infer(s.expr, env, subst, fields);
-        return { env, subst: result.subst, fields } as StmtResult;
+        return { env, subst: result.subst, fields, lastType: apply(result.subst, result.type) } as StmtResult;
       }),
     ),
 
@@ -746,27 +758,8 @@ export const inferProgram = (
       currentSubst = stmtResult.subst;
       currentFields = stmtResult.fields;
 
-      // Track the type of the last declaration for the return value
-      if (stmt._tag === "Declaration") {
-        const scheme = HashMap.get(currentEnv, stmt.name);
-        if (Option.isSome(scheme)) {
-          lastType = apply(currentSubst, instantiate(scheme.value));
-        }
-      } else if (stmt._tag === "ExprStatement") {
-        const r = yield* infer(stmt.expr, currentEnv, currentSubst, currentFields);
-        lastType = apply(r.subst, r.type);
-      } else if (stmt._tag === "ForceStatement") {
-        if (stmt.expr._tag === "Force" && stmt.expr.expr._tag === "UseExpr") {
-          const scheme = HashMap.get(currentEnv, stmt.expr.expr.name);
-          if (Option.isSome(scheme)) {
-            lastType = apply(currentSubst, instantiate(scheme.value));
-          }
-        } else if (stmt.expr._tag === "UseExpr") {
-          const scheme = HashMap.get(currentEnv, stmt.expr.name);
-          if (Option.isSome(scheme)) {
-            lastType = apply(currentSubst, instantiate(scheme.value));
-          }
-        }
+      if (stmtResult.lastType !== undefined) {
+        lastType = stmtResult.lastType;
       }
     }
 
