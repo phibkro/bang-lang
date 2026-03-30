@@ -9,3 +9,8 @@ export * as Parser from "./Parser.js";
 export * as Span from "./Span.js";
 export * as Value from "./Value.js";
 export * as Token from "./Token.js";
+export * as InferType from "./InferType.js";
+export * as TypeError from "./TypeError.js";
+export * as Unify from "./Unify.js";
+export * as Infer from "./Infer.js";
+export * as TypeCheck from "./TypeCheck.js";
