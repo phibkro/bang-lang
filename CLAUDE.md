@@ -35,13 +35,14 @@ Key concepts (see `docs/language-spec.md` for full v0.5 spec):
 ## Architecture
 
 Pipeline: `Lexer → Parser → Checker → Codegen`, each an Effect returning typed output.
-`@bang/core` owns AST + interpreter (ground truth). `@bang/compiler` depends on core for codegen.
-Interpreter defines semantics first. Compiler translates. If they disagree, interpreter wins.
+`@bang/core` owns AST + interpreter + type inference. `@bang/compiler` depends on core for codegen.
 
 ## Patterns
 
 - All domain types use `Schema.TaggedClass` (Token, AST, Span) or `Schema.TaggedError` (CompilerError)
 - Recursive AST types use `Schema.suspend` for forward references
+- `Schema.OptionFromUndefinedOr` fields (Arm.guard, Declaration.typeAnnotation) are `Option<T>` at runtime — use `Option.isSome()`, NOT `!== undefined`
+- `constructor` is reserved on Schema.TaggedClass — use `ctor` (see InferType.TApp)
 - All dispatch uses `Match.tag` with `Match.exhaustive` — no switch/case on `_tag`
 - Checker uses `HashMap` for scope, `Option` for nullable values, `Effect.fail` for errors
 - Codegen uses immutable `WriterState` accumulator — no mutable class
@@ -86,17 +87,14 @@ Pragmatic (skip):
 - `packages/core/src/Infer.ts` — HM inference engine: infer, inferStmt, inferPattern, inferProgram
 - `packages/core/src/TypeCheck.ts` — public API: typeCheck(program) wraps inferProgram
 - `packages/compiler/src/Compiler.ts` — pipeline entry: compose(lex, parse, check, codegen)
-- `packages/compiler/src/Checker.ts` — type checking / scope validation
+- `packages/compiler/src/Checker.ts` — scope validation, effect classification, cycle detection (produces InferType annotations)
 - `packages/compiler/src/Codegen.ts` — Effect TS code generation
 - `packages/cli/src/index.ts` — CLI entry point (@effect/cli): compile, run, fmt
 
 ## Status
 
-v0.5.1 compiler complete. Layer 1 HM type inference implemented in @bang/core.
-316 tests across 32 files, 200 random property test iterations.
-v0.5 adds: thunk axiom (!x <- 5, !match), dot methods (.handle/.catch/.map/.tap), use (resource CPS), on (push subscriptions + abort + cycle detection), nested patterns + guards, newtype + record type declarations, comptime.
-v0.5.1 adds: record field access (user.name), on .abort, use CPS protocol, handler namespacing, nested pattern codegen (arm grouping), braced multi-handler (.handle { A -> x, B -> y }), .match pipe (expr.match { arms }).
-Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)` — covers parser + formatter + interpreter.
+v0.5.1 compiler + Layer 1 HM type inference. 316 tests across 32 files.
+Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)`.
 
 ## Design Process
 
@@ -124,6 +122,7 @@ AST node (Schema.TaggedClass) → type errors everywhere
   → Lexer (new tokens if needed)
   → Parser (source → AST)
   → Interpreter (ground truth semantics)
+  → Infer (type inference rules)
   → Checker (scope/type rules)
   → Codegen (compile to Effect TS)
   → Formatter (canonical output)
@@ -162,7 +161,15 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 
 - `tsc` reports errors in Ast.ts (Schema.suspend + OptionFromUndefinedOr Encoded/Type mismatch) and Parser.ts (block return type) — type-level only, no runtime impact. `skipLibCheck: true` masks these.
 - `@effect/printer` Doc.nest inside Doc.group triggers a flatten bug — blocks format flat-only for now.
-- ESLint has ~140 warnings (imperative patterns in Parser/Interpreter/Codegen) — accepted per pragmatic style rules.
+- ESLint has ~209 warnings (imperative patterns in Parser/Interpreter/Codegen/Infer) — accepted per pragmatic style rules.
+
+## Known Inference Limitations
+
+- `Infer.ts` uses module-level mutable counter (`nextId`) — reset in `inferProgram`, not safe for concurrent use
+- `inferProgram` re-infers ExprStatement/ForceStatement expressions twice (wasteful, add lastType to StmtResult)
+- `generalize` doesn't apply subst to env before computing free vars — can under-generalize in nested scopes
+- Constructor pattern inference doesn't thread substitution — multi-field shared type vars may not unify correctly
+- Checker still owns effect classification and cycle detection; TypedAst annotations use TCon("Unknown") placeholders
 
 ## Known Codegen Limitations
 
@@ -180,5 +187,6 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 ## Working with Subagents
 
 - Subagents often implement ahead of scope. Check git status before dispatching next task.
+- Parallel agents sharing a worktree can accidentally stage each other's files. Use explicit `git add <specific files>`, not `git add .`.
 - Pre-commit hook runs lint + full test suite. Commits that fail lint errors (not warnings) are rejected.
 - `npx vitest run` — canonical test command. 316 tests across 32 files.
