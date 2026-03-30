@@ -583,6 +583,7 @@ const inferStmt = (
         env: HashMap.set(env, s.name, scheme),
         subst,
         fields,
+        lastType: inferType,
       } as StmtResult);
     }),
 

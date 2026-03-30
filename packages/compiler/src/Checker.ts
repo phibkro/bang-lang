@@ -305,7 +305,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     Match.tag("Block", (e) =>
       Effect.gen(function* () {
         const blockScope = buildScope(e.statements, scope);
-        yield* Effect.forEach(e.statements, (stmt) => checkStmt(stmt, blockScope), {
+        yield* Effect.forEach(e.statements, (stmt) => checkStmt(stmt, blockScope, undefined), {
           discard: true,
         });
         yield* validateExprScope(e.expr, blockScope);
@@ -578,8 +578,7 @@ const checkProgram = (program: Ast.Program): Effect.Effect<TypedAst.TypedProgram
   Effect.gen(function* () {
     const scope = buildScope(program.statements, HashMap.empty());
     // Run HM type inference (best-effort — errors are non-fatal for the checker)
-    const inferred = yield* inferProgram(program).pipe(
-      Effect.map((r) => r as ProgramResult | undefined),
+    const inferred: ProgramResult | undefined = yield* inferProgram(program).pipe(
       Effect.catchAll(() => Effect.succeed(undefined as ProgramResult | undefined)),
     );
     const statements = yield* Effect.forEach(program.statements, (stmt) => checkStmt(stmt, scope, inferred));
