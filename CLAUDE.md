@@ -8,7 +8,7 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (interpreter domain), `@ban
 - `vp check --fix` — format + Oxlint (auto-fix)
 - `vp run lint` — ESLint with Effect/functional rules (auto-fix)
 - `vp run check` — tsc + ESLint (full verification)
-- `npx vitest run` — run all tests (316 tests, use this for accurate counts)
+- `npx vitest run` — run all tests (319 tests, use this for accurate counts)
 - `bang compile examples/hello.bang` — compile .bang to .ts
 - `bang fmt <file.bang>` — format in place
 - `bang run <file.bang>` — compile and execute
@@ -93,7 +93,7 @@ Pragmatic (skip):
 
 ## Status
 
-v0.5.1 compiler + Layer 1 HM type inference. 316 tests across 32 files.
+v0.5.1 compiler + Layer 1 HM type inference. 319 tests across 32 files.
 Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)`.
 
 ## Design Process
@@ -166,7 +166,8 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 ## Known Inference Limitations
 
 - `Infer.ts` uses module-level mutable counter (`nextId`) — reset in `inferProgram`, not safe for concurrent use. Documented in code.
-- Checker still owns effect classification and cycle detection; TypedAst annotations use TCon("Unknown") placeholders
+- Checker runs inferProgram then annotates — inference errors are non-fatal (falls back to TCon("Unknown"))
+- ForceStatement/ExprStatement/TypeDecl/Import/Export annotations still use TCon("Unknown") — only Declaration and Declare carry real inferred types
 
 ## Known Codegen Limitations
 
@@ -186,4 +187,4 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 - Subagents often implement ahead of scope. Check git status before dispatching next task.
 - Parallel agents sharing a worktree can accidentally stage each other's files. Use explicit `git add <specific files>`, not `git add .`.
 - Pre-commit hook runs lint + full test suite. Commits that fail lint errors (not warnings) are rejected.
-- `npx vitest run` — canonical test command. 316 tests across 32 files.
+- `npx vitest run` — canonical test command. 319 tests across 32 files.
