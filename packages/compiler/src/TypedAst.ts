@@ -1,8 +1,9 @@
 import type * as Ast from "@bang/core/Ast";
+import type { InferType } from "@bang/core/InferType";
 import type { Span } from "@bang/core/Span";
 
 export interface TypeAnnotation {
-  readonly type: Ast.Type;
+  readonly type: InferType;
   readonly effectClass: "signal" | "effect";
   readonly forceResolution?: "yield*" | "promise" | "sync" | "none";
 }

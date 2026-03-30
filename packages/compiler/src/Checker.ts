@@ -2,6 +2,8 @@ import { Array as Arr, Effect, HashMap, Match, Option } from "effect";
 import * as Ast from "@bang/core/Ast";
 import type { CompilerError } from "@bang/core/CompilerError";
 import { CheckError } from "@bang/core/CompilerError";
+import type { InferType } from "@bang/core/InferType";
+import { TArrow, TCon } from "@bang/core/InferType";
 import * as Span from "@bang/core/Span";
 import type * as TypedAst from "./TypedAst.js";
 import { annotate } from "./TypedAst.js";
@@ -45,10 +47,17 @@ const finalReturnType = (type: Ast.Type): Ast.Type =>
     Match.orElse(() => type),
   );
 
-const unknownType: Ast.ConcreteType = new Ast.ConcreteType({
-  name: "Unknown",
-  span: Span.empty,
-});
+const unknownType: InferType = new TCon({ name: "Unknown" });
+
+/** Convert an Ast.Type to InferType (simplified — Layer 1 placeholder). */
+const astTypeToInferSimple = (t: Ast.Type): InferType =>
+  Match.value(t).pipe(
+    Match.tag("ConcreteType", (c) => new TCon({ name: c.name }) as InferType),
+    Match.tag("ArrowType", (a) =>
+      new TArrow({ param: astTypeToInferSimple(a.param), result: astTypeToInferSimple(a.result) }) as InferType),
+    Match.tag("EffectType", (e) => astTypeToInferSimple(e.value)),
+    Match.exhaustive,
+  );
 
 // ---------------------------------------------------------------------------
 // Scope lookup helpers
@@ -347,14 +356,14 @@ const checkStmt = (
 ): Effect.Effect<TypedAst.TypedStmt, CompilerError> =>
   Match.value(stmt).pipe(
     Match.tag("Declare", (s) =>
-      Effect.succeed(annotate(s, { type: s.typeAnnotation, effectClass: "signal" as const })),
+      Effect.succeed(annotate(s, { type: astTypeToInferSimple(s.typeAnnotation), effectClass: "signal" as const })),
     ),
     Match.tag("Declaration", (s) =>
       Effect.gen(function* () {
         yield* validateExprScope(s.value, scope);
         const effectClass = classifyExpr(s.value, scope);
         return annotate(s, {
-          type: Option.getOrElse(s.typeAnnotation, () => unknownType),
+          type: Option.match(s.typeAnnotation, { onNone: () => unknownType, onSome: astTypeToInferSimple }),
           effectClass,
         });
       }),
@@ -364,9 +373,9 @@ const checkStmt = (
         if (s.expr._tag === "Force") {
           yield* validateExprScope(s.expr.expr, scope);
           const entry = lookupByExpr(scope, s.expr.expr);
-          const type = Option.match(
+          const type: InferType = Option.match(
             Option.flatMap(entry, (e) => e.type),
-            { onNone: () => unknownType, onSome: finalReturnType },
+            { onNone: () => unknownType, onSome: (t) => astTypeToInferSimple(finalReturnType(t)) },
           );
           const isEffect = Option.match(entry, {
             onNone: () => false,
