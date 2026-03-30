@@ -8,7 +8,7 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (interpreter domain), `@ban
 - `vp check --fix` — format + Oxlint (auto-fix)
 - `vp run lint` — ESLint with Effect/functional rules (auto-fix)
 - `vp run check` — tsc + ESLint (full verification)
-- `npx vitest run` — run all tests (319 tests, use this for accurate counts)
+- `npx vitest run` — run all tests (322 tests, use this for accurate counts)
 - `bang compile examples/hello.bang` — compile .bang to .ts
 - `bang fmt <file.bang>` — format in place
 - `bang run <file.bang>` — compile and execute
@@ -55,6 +55,8 @@ Pipeline: `Lexer → Parser → Checker → Codegen`, each an Effect returning t
 - Formatter uses `@effect/printer` Doc IR — `Doc.group` for smart line-breaking, `Doc.hcat` for concatenation
 - AST generators use `FastCheck` from effect with bounded recursion for property tests
 - Pre-commit: `vp staged` runs `vp check --fix` + `npx eslint --fix` on staged .ts files
+- TypeError (from @bang/core) ≠ CompilerError — inference errors must be `catchAll`'d when crossing core→compiler boundary
+- Checker.ts has a nested `checkStmt` call inside block validation (~line 308) — update ALL call sites when changing signature
 
 ## Effect Style Rules
 
@@ -93,7 +95,7 @@ Pragmatic (skip):
 
 ## Status
 
-v0.5.1 compiler + Layer 1 HM type inference. 319 tests across 32 files.
+v0.5.1 compiler + Layer 1 HM type inference. 322 tests across 33 files.
 Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)`.
 
 ## Design Process
@@ -134,20 +136,9 @@ The AST is the type-level test. Match.exhaustive is the assertion. The spec says
 
 ## Correctness
 
-Three layers, ordered by cost-effectiveness:
+Priority: types (illegal states unrepresentable) > property tests (`it.prop`, algebraic laws) > unit tests (specific cases).
 
-1. **Types** — Make illegal states unrepresentable. Schema.TaggedClass, Match.exhaustive, Span as {start, end} not 6 fields. Prevent entire bug classes with zero tests.
-
-2. **Property tests** — Algebraic laws that hold for all inputs. `eval(Block([], e)) ≡ eval(e)`. Determinism. Lambda application matches direct computation. Catch systematic bugs. Use `it.prop` / `it.effect.prop`.
-
-3. **Unit/E2E tests** — Specific behaviors and edge cases. Division by zero. Undeclared variables. Full program compilation. Catch individual bugs.
-
-**Correctness equation** (Bahr & Hutton "Calculating Correct Compilers"):
-
-```
-eval(ast) ≡ run(codegen(ast))     -- compiler correctness
-eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
-```
+Correctness equations: `eval(ast) ≡ run(codegen(ast))` and `eval(parse(format(ast))) ≡ eval(ast)`.
 
 ## Interpreter Patterns
 
@@ -187,4 +178,4 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 - Subagents often implement ahead of scope. Check git status before dispatching next task.
 - Parallel agents sharing a worktree can accidentally stage each other's files. Use explicit `git add <specific files>`, not `git add .`.
 - Pre-commit hook runs lint + full test suite. Commits that fail lint errors (not warnings) are rejected.
-- `npx vitest run` — canonical test command. 319 tests across 32 files.
+- `npx vitest run` — canonical test command. 322 tests across 33 files.
