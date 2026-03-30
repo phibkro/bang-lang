@@ -504,8 +504,10 @@ const inferPattern = (
         for (let i = 0; i < p.patterns.length; i++) {
           const subPat = p.patterns[i] as Pattern;
           const subResult = yield* inferPattern(subPat, env);
-          for (const [name, sch] of subResult.env) {
-            bindings = HashMap.set(bindings, name, sch);
+          // Bind sub-pattern names to the constructor's field type (not the unconstrained fresh var)
+          const fieldType = i < paramTypes.length ? paramTypes[i] as InferType : subResult.type;
+          for (const [name] of subResult.env) {
+            bindings = HashMap.set(bindings, name, { vars: [], type: fieldType } as Scheme);
           }
         }
 
