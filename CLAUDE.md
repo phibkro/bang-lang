@@ -8,7 +8,7 @@ Bang transpiles to Effect TS. Monorepo: `@bang/core` (interpreter domain), `@ban
 - `vp check --fix` — format + Oxlint (auto-fix)
 - `vp run lint` — ESLint with Effect/functional rules (auto-fix)
 - `vp run check` — tsc + ESLint (full verification)
-- `npx vitest run` — run all tests (263 tests, use this for accurate counts)
+- `npx vitest run` — run all tests (316 tests, use this for accurate counts)
 - `bang compile examples/hello.bang` — compile .bang to .ts
 - `bang fmt <file.bang>` — format in place
 - `bang run <file.bang>` — compile and execute
@@ -80,6 +80,11 @@ Pragmatic (skip):
 - `packages/core/src/Formatter.ts` — canonical pretty-printer via @effect/printer (Wadler-Lindig)
 - `packages/core/src/Value.ts` — interpreter values (Data.TaggedEnum, not Schema.TaggedClass — internal only)
 - `packages/core/src/AstGen.ts` — random AST generators for property tests
+- `packages/core/src/InferType.ts` — TVar, TCon, TArrow, TApp (Schema.TaggedClass) for HM inference
+- `packages/core/src/TypeError.ts` — 8 structured type error variants (Schema.TaggedError)
+- `packages/core/src/Unify.ts` — Substitution (HashMap), apply, unify with occurs check
+- `packages/core/src/Infer.ts` — HM inference engine: infer, inferStmt, inferPattern, inferProgram
+- `packages/core/src/TypeCheck.ts` — public API: typeCheck(program) wraps inferProgram
 - `packages/compiler/src/Compiler.ts` — pipeline entry: compose(lex, parse, check, codegen)
 - `packages/compiler/src/Checker.ts` — type checking / scope validation
 - `packages/compiler/src/Codegen.ts` — Effect TS code generation
@@ -87,7 +92,8 @@ Pragmatic (skip):
 
 ## Status
 
-v0.5.1 compiler complete. 263 tests across 28 files, 200 random property test iterations.
+v0.5.1 compiler complete. Layer 1 HM type inference implemented in @bang/core.
+316 tests across 32 files, 200 random property test iterations.
 v0.5 adds: thunk axiom (!x <- 5, !match), dot methods (.handle/.catch/.map/.tap), use (resource CPS), on (push subscriptions + abort + cycle detection), nested patterns + guards, newtype + record type declarations, comptime.
 v0.5.1 adds: record field access (user.name), on .abort, use CPS protocol, handler namespacing, nested pattern codegen (arm grouping), braced multi-handler (.handle { A -> x, B -> y }), .match pipe (expr.match { arms }).
 Roundtrip property test: `eval(parse(format(ast))) ≡ eval(ast)` — covers parser + formatter + interpreter.
@@ -175,4 +181,4 @@ eval(parse(print(ast))) ≡ eval(ast)  -- pretty-printer roundtrip
 
 - Subagents often implement ahead of scope. Check git status before dispatching next task.
 - Pre-commit hook runs lint + full test suite. Commits that fail lint errors (not warnings) are rejected.
-- `npx vitest run` — canonical test command. 263 tests across 28 files.
+- `npx vitest run` — canonical test command. 316 tests across 32 files.
