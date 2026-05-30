@@ -411,6 +411,12 @@ const emitExpr = (
       const handler = emitExpr(e.handler, decls, mutNames, hoistedNames);
       return `subscribeToRef(${source}, ${handler})`;
     }),
+    // Slice A behavior #4 (next) implements this: STM.commit(STM.gen(...)) with
+    // mut→TRef promotion. Until then, fail loud rather than silently emit wrong
+    // (non-STM) code — the interpreter already has correct semantics.
+    Match.tag("TransactionExpr", () => {
+      throw new Error("transaction codegen not yet implemented (STM design Slice A behavior #4)");
+    }),
     Match.tag("MatchExpr", (e) => {
       const scrutinee = emitExpr(e.scrutinee, decls, mutNames, hoistedNames);
       const arms = e.arms;
@@ -753,6 +759,8 @@ const exprContains = (expr: Ast.Expr, pred: (e: Ast.Expr) => boolean): boolean =
       return exprContains(expr.value, pred);
     case "OnExpr":
       return exprContains(expr.source, pred) || exprContains(expr.handler, pred);
+    case "TransactionExpr":
+      return exprContains(expr.body, pred);
     default:
       return false;
   }

@@ -89,6 +89,7 @@ const ExprSchema: Schema.Schema<Expr> = Schema.suspend(() =>
     ComptimeExpr,
     UseExpr,
     OnExpr,
+    TransactionExpr,
   ),
 );
 
@@ -209,6 +210,14 @@ export class OnExpr extends Schema.TaggedClass<OnExpr>()("OnExpr", {
   span: Span,
 }) {}
 
+// `transaction Block` — an STM-typed thunk. `body` is always a Block (the
+// parser enforces it); typed as Expr to match the recursive-field convention
+// used by ComptimeExpr/OnExpr/UseExpr.
+export class TransactionExpr extends Schema.TaggedClass<TransactionExpr>()("TransactionExpr", {
+  body: Schema.suspend((): Schema.Schema<Expr> => ExprSchema),
+  span: Span,
+}) {}
+
 export type Expr =
   | Ident
   | DotAccess
@@ -227,7 +236,8 @@ export type Expr =
   | MatchExpr
   | ComptimeExpr
   | UseExpr
-  | OnExpr;
+  | OnExpr
+  | TransactionExpr;
 
 // ---------------------------------------------------------------------------
 // Constructor nodes (for TypeDecl)

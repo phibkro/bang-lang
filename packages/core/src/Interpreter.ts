@@ -326,6 +326,10 @@ export const evalExpr = (expr: Ast.Expr, env: Env): Effect.Effect<Value, EvalErr
         return Tagged({ tag: "Subscription", fields: [Num({ value: id })], fieldNames: ["_id"] });
       }),
     ),
+    // Slice A: a transaction evaluates its body block. Atomicity (journal +
+    // rollback) is added in behavior #3, where a failing body makes it
+    // observable; until then this is observationally a plain block.
+    Match.tag("TransactionExpr", (e) => evalExpr(e.body, env)),
     Match.exhaustive,
   );
 

@@ -80,6 +80,10 @@ exactly as the spec's force-resolution table already prescribes.
 
 ### Interpreter model (the spec — ADR-0001)
 
+> **Lands in Slice B, not A.** TDD showed the journal has no observable effect
+> until `retry` exists (see §Pipeline & slicing). In Slice A a transaction
+> simply evaluates its body block. The model below is the Slice-B target.
+
 The reference interpreter gains a **transaction journal** (a tentative
 write-buffer over the `mut` cells a transaction touches):
 
@@ -246,12 +250,22 @@ then translate"). Walk the standard feature pipeline (AST node → Lexer → Par
 → Interpreter → Infer → Checker → Codegen → Formatter → property test). Sliced
 so each slice lands independently green (`vp run check` + `pnpm test`):
 
-- **Slice A — atomic block.** `transaction { }` + `TRef` classification +
-  commit. AST node, parser rule, interpreter journal + commit, Infer/Checker
-  classification and the v1 mixed-mode restriction, codegen, formatter, roundtrip
-  property test.
-- **Slice B — retry.** `!retry`: abort + rollback in the interpreter, the
-  blocked-error boundary, `STM.retry` codegen.
+- **Slice A — atomic block.** `transaction { }` + `TRef` classification. AST
+  node, parser rule, interpreter (evaluates the body as a block — see note),
+  Checker lexical classification + the v1 mixed-mode / `on`-conflict errors,
+  codegen with `mut`→`TRef` promotion, formatter, roundtrip property test.
+  **No journal in Slice A** — discovered during TDD: without an abort path
+  (retry) or concurrency, a buffered-then-committed write is *observationally
+  identical* to a direct mutation (behavior "commit visible" passes with zero
+  journal code), and rollback-on-failure isn't observable through the public
+  interface because execution can't continue past the failure to inspect state.
+  A journal here would be speculative code no test can drive. So Slice A's
+  interpreter semantics are simply "a transaction evaluates as a block";
+  atomicity is vacuously satisfied single-threaded with no abort path.
+- **Slice B — retry + the journal.** `!retry`: this is where the journal earns
+  its place — a `retry` rolls back *and continues* (re-runs), making buffered
+  commit observable. Interpreter gains the transaction-scoped overlay (write
+  buffer + rollback), the blocked-error boundary, and `STM.retry` codegen.
 - **Slice C — orElse.** `.orElse` dot-method: sub-journal try/fallback in the
   interpreter, `STM.orElse` codegen.
 - **Slice D — transactional functions.** Parameter `TRef` inference for

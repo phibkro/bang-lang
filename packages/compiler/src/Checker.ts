@@ -207,6 +207,7 @@ const classifyExpr = (expr: Ast.Expr, scope: Scope): "signal" | "effect" =>
     Match.tag("ComptimeExpr", (e) => classifyExpr(e.expr, scope)),
     Match.tag("UseExpr", () => "effect" as const),
     Match.tag("OnExpr", () => "effect" as const),
+    Match.tag("TransactionExpr", () => "effect" as const),
     Match.exhaustive,
   );
 
@@ -346,6 +347,7 @@ const validateExprScope = (expr: Ast.Expr, scope: Scope): Effect.Effect<void, Co
     Match.tag("OnExpr", (e) =>
       Effect.flatMap(validateExprScope(e.source, scope), () => validateExprScope(e.handler, scope)),
     ),
+    Match.tag("TransactionExpr", (e) => validateExprScope(e.body, scope)),
     Match.exhaustive,
   );
 

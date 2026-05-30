@@ -165,6 +165,9 @@ const formatExpr = (expr: Ast.Expr): Doc.Doc<never> =>
     Match.tag("OnExpr", (e) =>
       Doc.hsep([Doc.text("on"), formatExpr(e.source), formatExpr(e.handler)]),
     ),
+    Match.tag("TransactionExpr", (e) =>
+      Doc.hcat([Doc.text("transaction "), formatExpr(e.body)]),
+    ),
     Match.exhaustive,
   );
 

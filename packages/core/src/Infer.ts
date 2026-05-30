@@ -414,6 +414,9 @@ const infer = (
       }),
     ),
 
+    // A transaction's value type is the type of its body block.
+    Match.tag("TransactionExpr", (e) => infer(e.body, env, subst, fields)),
+
     Match.tag("DotAccess", (e) =>
       Effect.gen(function* () {
         const objResult = yield* infer(e.object, env, subst, fields);

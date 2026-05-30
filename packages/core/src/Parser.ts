@@ -1047,6 +1047,15 @@ const parsePrimary = (s: ParseState): P<Ast.Expr> =>
       ] as const;
     }
 
+    if (tag === "Keyword" && tokenValue(t) === "transaction") {
+      const [startTok, s1] = yield* advance(s);
+      const [body, s2] = yield* parseBlock(s1);
+      return [
+        new Ast.TransactionExpr({ body, span: Span.merge(tokenSpan(startTok), body.span) }),
+        s2,
+      ] as const;
+    }
+
     if (tag === "Delimiter" && tokenValue(t) === "{") {
       return yield* parseBlock(s);
     }
