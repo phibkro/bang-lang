@@ -26,6 +26,7 @@
           pnpm
           bubblewrap
           bash
+          git # many JS tools shell out to git; keep it available inside the sandbox
         ];
 
         shellHook = ''
