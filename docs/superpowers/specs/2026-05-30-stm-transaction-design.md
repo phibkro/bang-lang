@@ -52,9 +52,17 @@ the shipped spec and ADRs. Reconciliation table is in §Reconciliation.
 ## Surface syntax & semantics
 
 All conformant with `docs/language-spec.md`. No new keywords — `transaction` is
-the only one; `retry`/`orElse` live in `STD.STM` (consistent with `all`/`race`/
-`fork` being `STD.CONCURRENT` functions and `handle`/`catch`/`map`/`tap` being
-dot-methods, per the spec's explicit "not a keyword" list).
+the only one. `retry` and `orElse` are **compiler intrinsics**, not library
+functions: there is no `@bang/std` package (only `core`/`compiler`/`cli`), so
+the spec's `STD.STM` is fiction until someone builds it. They are recognized by
+name and special-cased, exactly as the four combinators `handle`/`catch`/`map`/
+`tap` already are — those are **not** generic dispatch but hardcoded arms in
+`Codegen.ts` (lines 277–302). `.orElse` becomes a fifth such arm; `retry` is a
+compiler-recognized identifier handled in transaction scope. Both are
+documented as STM vocabulary in `CONCEPTS.md`; neither is a user-space
+importable value. (Standing up a real `@bang/std` to home them — and eventually
+`TRef`, `all`/`race`/`fork` — is deferred; it's a new package + monorepo wiring,
+out of scope for v1.)
 
 | Form | Meaning |
 | --- | --- |
@@ -117,9 +125,24 @@ shortcut.
   function — is classified `TRef`; every other `mut` stays `Ref`. A transactional
   function's `mut`-typed parameters are inferred as `TRef` from the STM effect in
   its body.
-- **v1 restriction:** a `TRef`-classified `mut` used *outside* any transaction is
-  a **compile error** with a clear message naming the binding and pointing to the
-  transaction that promoted it. This defers the genuinely-racy mixed-mode case
+- **`on` + `transaction` on one cell is a dedicated error (likely permanent).** A
+  `mut` that is both an `on` source (`Interpreter.ts:312` requires `on`'s source
+  be a `mut`) and transaction-touched gets a *distinct* diagnostic — an
+  "STM/reactive conflict" — not the generic mixed-mode message. Rationale: `on`
+  is glitch-free pull-on-update; STM is optimistic and retryable. If a
+  transaction that wrote the cell retries or rolls back, there is no coherent
+  story for whether the `on` handler already fired on a now-discarded value. The
+  two topologies don't compose on a shared cell. Unlike the general mixed-mode
+  restriction (a v1 deferral), this one is expected to stand. The classification
+  pass counts `on`-usage as outside-transaction use, then specially recognizes
+  the on+transaction overlap to emit the sharper diagnostic.
+- **v1 restriction:** a `TRef`-classified `mut` that is **read or written**
+  (`!x`, `!x <- v`, or subscribed via `on x`) *outside* any transaction is a
+  **compile error** with a clear message naming the binding and pointing to the
+  transaction that promoted it. The binding's **declaration/allocation** site
+  (`mut alice = 1000` at top level) does *not* count as use — otherwise the
+  feature would be unusable, since refs are always allocated outside the
+  transactions that mutate them. This defers the genuinely-racy mixed-mode case
   and keeps codegen for non-transaction bindings byte-identical to today
   (protecting the existing suite).
 
@@ -138,6 +161,14 @@ Refines the spec's transpilation mapping for `TRef`:
 | `!transaction …` outside a transaction | `yield* STM.commit(STM.gen(…))` |
 | `!transaction …` inside a transaction | `yield* (…)` (compose) |
 | `a.orElse b` | `STM.orElse(a, () => b)` |
+
+`!retry` and `.orElse` are **compiler intrinsics** (see §Surface syntax), not
+library calls. `.orElse` is added as a fifth hardcoded dot-method arm alongside
+`handle`/`catch`/`map`/`tap` in `Codegen.ts` (~line 302). `retry` is recognized
+by name in transaction scope by both interpreter and codegen; it is **not**
+resolved through the env / `declare`-wrapper path, so the interpreter must
+short-circuit it before normal identifier lookup (which would otherwise fail
+"undefined identifier").
 
 Exact `@effect/stm` signatures (`STM.orElse`'s lazy second argument, the
 `STM.void`/`STM.unit`/`STM.succeed(undefined)` spelling for the empty branch,
@@ -238,12 +269,34 @@ so each slice lands independently green (`vp run check` + `pnpm test`):
 | `effect STM { … }` declaration | dropped — ADR-0002, no `effect` keyword |
 | `[S]` bracket generics | juxtaposition (`TRef Int`) |
 
-## Open items handed to grill-with-docs
+## Code-reality findings (resolved during grilling)
 
-- Confirm the `STD.STM` naming/placement of `retry` and `orElse` against the
-  spec's stdlib map (spec lists only `TRef` under `STD.STM`).
-- Confirm the exact wording and error class of the "transaction blocked"
-  defined-error and where it sits among existing `EvalError` variants.
-- Pressure-test the classification rule against the existing `on`/`use` scope
-  handling in `Checker.ts` for interaction (e.g. a `mut` used in both `on` and
-  `transaction`).
+- **No `@bang/std`.** `STD.STM`/`STD.CONCURRENT`/`TRef` exist only in
+  `language-spec.md`, not in code. `retry`/`orElse` are therefore **compiler
+  intrinsics**, not library imports (see §Surface syntax & §Codegen). Building a
+  real `@bang/std` is deferred.
+- **`EvalError` has no variants.** It is a single flat `Schema.TaggedError`
+  (`message`, optional `tag`, `span`) in `Value.ts:41`. The "transaction
+  blocked" error is therefore just `new EvalError({ message: "transaction
+  blocked — no progress possible", tag: "TransactionBlocked", span })` — the
+  existing optional `tag` field carries the programmatic discriminator; no new
+  error type is introduced.
+- **`MutCell` mutates in place** (`Value.ts:27`, with a baked-in `subscribers`
+  array for `on`); there is no journal today. The interpreter's transaction
+  journal is a new transaction-scoped overlay keyed on `MutCell.ref` object
+  identity, threaded through `evalExpr` while a transaction is open; see
+  §Interpreter model. (Implementation detail confirmed feasible, not a fork.)
+
+## Grilling outcome
+
+All open items resolved against code reality (see §Code-reality findings and the
+`on`+`transaction` rule in §Type system). Design is hardened; ready for `tdd`
+(Slice A first).
+
+**Glossary discipline:** STM vocabulary (`transaction`, `TRef`, the transaction
+journal, `retry`, `.orElse`, the STM/reactive conflict) is deliberately **not**
+added to `CONCEPTS.md` yet — that glossary tracks what the language *does*, and
+the feature is unbuilt. Each slice's definition of done includes adding its
+now-real terms to `CONCEPTS.md` as it lands, so the glossary never describes
+behavior the code lacks. The resolved vocabulary lives here in the design spec
+until then.
