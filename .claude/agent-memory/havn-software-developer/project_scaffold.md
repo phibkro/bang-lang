@@ -4,17 +4,17 @@ description: Structure, tooling, and conventions established during initial proj
 type: project
 ---
 
-Monorepo uses pnpm workspaces (pnpm-workspace.yaml) with two packages: @bang/core and @bang/cli. vp (Vite+) is the unified toolchain — `vp check` runs format+lint, `vp test` runs vitest.
+Monorepo uses pnpm workspaces (pnpm-workspace.yaml) with three packages: @bang/core (interpreter domain), @bang/compiler (compilation pipeline), and @bang/cli (CLI). vp (Vite+) is the unified toolchain — `vp check` runs format+lint, `vp test` runs vitest.
 
 Vitest is installed at root (devDependency) with a root `vitest.config.ts` setting `passWithNoTests: true`, so `vp test` passes when no test files exist yet. Each package also has its own `vitest.config.ts` with the same setting.
 
 `vp check --fix` auto-fixes formatting — run it before `vp check` when adding new files, since the formatter touches pnpm store index files and other generated files that aren't in the project.
 
-`docs/superpowers/` is in `.gitignore` — these are specs/plans that must not be committed.
+`docs/superpowers/` holds design specs/plans (`specs/`, `plans/`). NOTE: it is NOT gitignored (verified `git check-ignore docs/superpowers/` exits non-zero) — an earlier note here wrongly claimed it was. Treat it as drill-down design docs, committable like the rest of `docs/`.
 
 **`vp test` quirk:** `vp test` at the workspace root reports "no tests" even when tests pass — this is a vp test runner quirk with the root config. Use `cd packages/core && node_modules/.bin/vitest run` (or same for packages/cli) to verify actual test counts and results. The exit code from `vp test` is still reliable (0 = pass, 1 = fail). Also, `--filter` is not a valid flag for `vp test` (it's not vitest's `--testNamePattern`).
 
-**Test baseline (as of v0.2 Task 7):** @bang/core: 72 tests across 12 test files (4 Interp tests pre-existing failures unrelated to grouping). @bang/cli: 1 test.
+**Test baseline:** stale historical numbers removed — run `pnpm test` for the current count (it reports per-file and total). (Historical note: the v0.2-era baseline recorded here was @bang/core 72 / @bang/cli 1; long superseded.)
 
 **Grouped expression pattern:** `(expr)` is parsed in `parsePrimary` by consuming `(`, calling `parseExprPrec(s1, 0)`, then expecting `)`. No AST wrapping — grouping is transparent. `isArgStart` must include `Delimiter("(")` for grouped expressions to work as function arguments. The lexer produces a `Unit` token (not `Delimiter("()")`) for `()`, so `parsePrimary`'s existing `Unit` case handles unit literals; `Delimiter("(")` is purely for grouping.
 
@@ -28,4 +28,4 @@ Vitest is installed at root (devDependency) with a root `vitest.config.ts` setti
 
 **Why:** pnpm is the package manager (not npm/yarn) — pnpm-workspace.yaml and pnpm-lock.yaml are present. npm commands fail due to cache permission issues in this environment; use pnpm directly.
 
-**How to apply:** Always use `pnpm install` (or `vp install`) not `npm install`. Run `vp check --fix` before `vp check` after creating files. Never commit docs/superpowers/. Verify test count with `node_modules/.bin/vitest run` not `vp test`.
+**How to apply:** Always use `pnpm install` (or `vp install`) not `npm install`. Run `vp check --fix` before `vp check` after creating files. Verify test count with `node_modules/.bin/vitest run` (or `pnpm test`) not `vp test`.
