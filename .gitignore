@@ -3,3 +3,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
+
+# nix dev shell + supply-chain sandbox (see flake.nix, scripts/dev-sandbox.sh)
+.direnv/
+.sandbox-home/
+result
+result-*
